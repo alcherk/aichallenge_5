@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ChatGPT Proxy</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>ChatGPT Proxy</h1>
+            <p class="subtitle">FastAPI + Docker single-page chat UI</p>
+        </header>
+
+        <main class="chat-container">
+            <div id="messages" class="messages" aria-live="polite"></div>
+            <form id="chat-form" class="chat-form">
+                <textarea id="message-input" name="message" rows="2" placeholder="Type your message..." required></textarea>
+                <button type="submit" id="send-button">Send</button>
+            </form>
+        </main>
+
+        <footer class="app-footer">
+            <span>Backend: FastAPI · Port 8333 · Docker-ready</span>
+        </footer>
+    </div>
+
+    <script src="/static/chat.js"></script>
+</body>
+</html>

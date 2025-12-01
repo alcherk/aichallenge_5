@@ -1,0 +1,13 @@
+version: "3.9"
+services:
+  chatgpt-proxy:
+    build: .
+    container_name: chatgpt-proxy
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4.1-mini}
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8333
+    ports:
+      - "8333:8333"
+    restart: unless-stopped
