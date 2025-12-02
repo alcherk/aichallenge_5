@@ -34,7 +34,10 @@ async def health_check() -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("chat.html", {"request": request})
+    # Add cache-busting timestamp to prevent CSS/JS caching
+    import time
+    cache_bust = int(time.time())
+    return templates.TemplateResponse("chat.html", {"request": request, "cache_bust": cache_bust})
 
 
 @app.post(

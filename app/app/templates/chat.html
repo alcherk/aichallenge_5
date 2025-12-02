@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ChatGPT Proxy</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v={{ cache_bust }}" />
 </head>
 <body>
     <div class="app-container">
@@ -26,6 +26,6 @@
         </footer>
     </div>
 
-    <script src="/static/chat.js"></script>
+    <script src="/static/chat.js?v={{ cache_bust }}"></script>
 </body>
 </html>
