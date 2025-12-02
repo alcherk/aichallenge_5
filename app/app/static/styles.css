@@ -125,6 +125,123 @@ body {
     color: var(--text-primary);
 }
 
+.json-content {
+    margin-top: 4px;
+}
+
+.json-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    margin-bottom: 6px;
+    opacity: 0.9;
+}
+
+.json-context-text {
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+}
+
+.json-content pre {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    overflow-x: auto;
+}
+
+.json-content code {
+    display: block;
+    padding: 10px 12px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    border-radius: 8px;
+    font-family: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #e5e7eb;
+    white-space: pre;
+    overflow-x: auto;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.json-content code {
+    color: #e5e7eb; /* Default text color */
+}
+
+.json-content code .json-key {
+    color: #60a5fa;
+}
+
+.json-content code .json-string {
+    color: #34d399;
+}
+
+.json-content code .json-number {
+    color: #fbbf24;
+}
+
+.json-content code .json-boolean {
+    color: #f472b6;
+}
+
+.json-content code .json-null {
+    color: #9ca3af;
+}
+
+.show-full-response-btn {
+    margin-left: auto;
+    padding: 4px 8px;
+    font-size: 10px;
+    background: rgba(56, 189, 248, 0.2);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    border-radius: 4px;
+    color: var(--accent);
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.show-full-response-btn:hover {
+    background: rgba(56, 189, 248, 0.3);
+    border-color: var(--accent);
+}
+
+.full-response-json {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.full-response-json pre {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    overflow-x: auto;
+}
+
+.full-response-json code {
+    display: block;
+    padding: 10px 12px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(56, 189, 248, 0.3);
+    border-radius: 8px;
+    font-family: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", "Courier New", monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #e5e7eb;
+    white-space: pre;
+    overflow-x: auto;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
 .message-meta {
     display: flex;
     gap: 6px;

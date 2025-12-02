@@ -17,7 +17,7 @@ class Settings:
         self.openai_api_base: AnyHttpUrl | str = os.getenv(
             "OPENAI_API_BASE", "https://api.openai.com/v1"
         )
-        self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+        self.openai_model: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         self.request_timeout_seconds: int = int(
             os.getenv("REQUEST_TIMEOUT_SECONDS", "60")
         )

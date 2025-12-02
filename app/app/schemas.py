@@ -38,3 +38,16 @@ class ChatResponse(BaseModel):
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class StructuredResponse(BaseModel):
+    """
+    Consistent structured response format for tool chaining.
+    Always returns the same structure regardless of success or failure.
+    """
+    success: bool
+    status_code: int
+    message: str
+    data: Optional[ChatResponse] = None
+    error: Optional[dict] = None
+    metadata: Optional[dict] = None
