@@ -73,27 +73,7 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
     try:
         chat_response = await call_chatgpt(request)
         
-        # Format the assistant's response content as JSON
-        # Since we use response_format with json_schema, OpenAI returns JSON in content
-        import json
-        if chat_response.choices and len(chat_response.choices) > 0:
-            assistant_content = chat_response.choices[0].message.content
-            
-            # Parse the JSON response from OpenAI (it should match our schema)
-            try:
-                parsed_content = json.loads(assistant_content)
-                # Format as pretty JSON string
-                formatted_content = json.dumps(parsed_content, indent=2, ensure_ascii=False)
-            except (json.JSONDecodeError, ValueError):
-                # If parsing fails, wrap it in a JSON structure
-                formatted_content = json.dumps({
-                    "role": "assistant",
-                    "content": assistant_content,
-                    "metadata": {}
-                }, indent=2, ensure_ascii=False)
-            
-            # Update the content with formatted JSON
-            chat_response.choices[0].message.content = formatted_content
+        # Assistant response is now plain text/markdown - no JSON formatting needed
         
         return StructuredResponse(
             success=True,

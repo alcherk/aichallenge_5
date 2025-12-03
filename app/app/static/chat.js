@@ -100,6 +100,66 @@ function syntaxHighlightJSON(jsonString) {
   }
 }
 
+function formatMarkdown(text) {
+  if (!text) return '';
+  
+  let html = text;
+  
+  // Code blocks first (before escaping)
+  html = html.replace(/```([\s\S]*?)```/g, (match, code) => {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<pre><code>' + escaped + '</code></pre>';
+  });
+  
+  // Inline code
+  html = html.replace(/`([^`\n]+)`/g, (match, code) => {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<code>' + escaped + '</code>';
+  });
+  
+  // Escape remaining HTML
+  const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
+  html = parts.map(part => {
+    if (part.startsWith('<pre><code>')) {
+      return part; // Already processed
+    }
+    return part.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }).join('');
+  
+  // Headers
+  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  
+  // Bold and italic (after escaping)
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/__(.*?)__/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  html = html.replace(/_(.*?)_/g, '<em>$1</em>');
+  
+  // Links
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  
+  // Lists
+  html = html.replace(/^\* (.*$)/gim, '<li>$1</li>');
+  html = html.replace(/^- (.*$)/gim, '<li>$1</li>');
+  html = html.replace(/^(\d+)\. (.*$)/gim, '<li>$2</li>');
+  
+  // Wrap consecutive list items in ul
+  html = html.replace(/(<li>.*<\/li>(\n|$))+/gim, '<ul>$&</ul>');
+  
+  // Line breaks - double newline becomes paragraph break
+  html = html.split(/\n\n+/).map(para => {
+    if (para.trim().startsWith('<')) {
+      return para; // Already has HTML tags
+    }
+    para = para.replace(/\n/g, '<br>');
+    return para.trim() ? '<p>' + para + '</p>' : '';
+  }).join('');
+  
+  return html;
+}
+
 function appendMessage(role, content, fullResponseData = null) {
   const row = document.createElement("div");
   row.className = `message-row ${role}`;
@@ -118,23 +178,29 @@ function appendMessage(role, content, fullResponseData = null) {
 
   const contentEl = document.createElement("div");
   
-  // Always display assistant messages as JSON
+  // Display assistant messages as markdown/plain text
   if (role === "assistant") {
-    // Try to extract and display JSON
+    contentEl.className = "message-content";
+    // Check if content is JSON and format it, otherwise display as markdown/text
     const extractedJSON = extractJSON(content);
-    const jsonToDisplay = extractedJSON || content;
-    
-    contentEl.className = "json-content";
-    const jsonLabel = document.createElement("div");
-    jsonLabel.className = "json-label";
-    jsonLabel.textContent = "📋 JSON Response";
-    contentEl.appendChild(jsonLabel);
-    
-    const pre = document.createElement("pre");
-    const code = document.createElement("code");
-    code.innerHTML = syntaxHighlightJSON(jsonToDisplay);
-    pre.appendChild(code);
-    contentEl.appendChild(pre);
+    if (extractedJSON) {
+      // If it's JSON, show it formatted
+      contentEl.className = "json-content";
+      const jsonLabel = document.createElement("div");
+      jsonLabel.className = "json-label";
+      jsonLabel.textContent = "📋 JSON Response";
+      contentEl.appendChild(jsonLabel);
+      
+      const pre = document.createElement("pre");
+      const code = document.createElement("code");
+      code.innerHTML = syntaxHighlightJSON(extractedJSON);
+      pre.appendChild(code);
+      contentEl.appendChild(pre);
+    } else {
+      // Display as markdown/plain text with basic formatting
+      contentEl.className = "markdown-content";
+      contentEl.innerHTML = formatMarkdown(content);
+    }
   } else {
     // User messages display as plain text
     contentEl.textContent = content;

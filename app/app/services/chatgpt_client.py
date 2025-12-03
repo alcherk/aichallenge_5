@@ -19,9 +19,37 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
         "Content-Type": "application/json",
     }
 
+    # Prepare messages with system prompt
+    messages = [m.dict() for m in payload.messages]
+    
+    # Check if there's already a system message
+    has_system_message = any(msg.get("role") == "system" for msg in messages)
+    
+    # Add system prompt if not present
+    if not has_system_message:
+        system_prompt = """Ты помощник-прокси между пользователем и системой.
+
+Твоя задача — сначала ПОНЯТЬ задачу, а потом решать.
+
+Формат ответа: обычный текст или Markdown.
+
+Если информации недостаточно, задай уточняющие вопросы.
+
+Если информации достаточно и можно решить задачу, предоставь подробное решение.
+
+Правила:
+- Не придумывай ответ на задачу, если нет данных — сперва задавай вопросы.
+- Когда считаешь, что вопросов достаточно, предоставь итоговый ответ.
+- Используй Markdown для форматирования (заголовки, списки, код и т.д.)."""
+        
+        messages.insert(0, {
+            "role": "system",
+            "content": system_prompt
+        })
+    
     body: Dict[str, Any] = {
         "model": payload.model or settings.openai_model,
-        "messages": [m.dict() for m in payload.messages],
+        "messages": messages,
     }
 
     if payload.temperature is not None:
@@ -29,29 +57,7 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
     if payload.max_tokens is not None:
         body["max_tokens"] = payload.max_tokens
     
-    # Always include response_format for structured JSON output
-    # Using json_schema format as per OpenAI API specification
-    body["response_format"] = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "chat_message",
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "role": {
-                        "type": "string",
-                        "enum": ["assistant"]
-                    },
-                    "content": {
-                        "type": "string"
-                    }
-                },
-                "required": ["role", "content"],
-                "additionalProperties": False
-            },
-            "strict": True
-        }
-    }
+    # No response_format - allow plain text/markdown output
 
     async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
         response = await client.post(
