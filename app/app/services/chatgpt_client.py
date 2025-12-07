@@ -19,13 +19,12 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
         "Content-Type": "application/json",
     }
 
-    # Prepare messages with system prompt
+    # Prepare messages - all historical messages including system prompt should be included
     messages = [m.dict() for m in payload.messages]
     
-    # Check if there's already a system message
+    # Ensure system message is present (should be included by frontend, but add if missing)
     has_system_message = any(msg.get("role") == "system" for msg in messages)
     
-    # Add system prompt if not present
     if not has_system_message:
         system_prompt = """Ты помощник-прокси между пользователем и системой.
 
@@ -46,6 +45,8 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
             "role": "system",
             "content": system_prompt
         })
+    
+    # All messages (system + user + assistant history) are now included
     
     body: Dict[str, Any] = {
         "model": payload.model or settings.openai_model,

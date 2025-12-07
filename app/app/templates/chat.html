@@ -9,8 +9,22 @@
 <body>
     <div class="app-container">
         <header class="app-header">
-            <h1>ChatGPT Proxy</h1>
-            <p class="subtitle">FastAPI + Docker single-page chat UI</p>
+            <div class="header-content">
+                <div>
+                    <h1>ChatGPT Proxy</h1>
+                    <p class="subtitle">FastAPI + Docker single-page chat UI</p>
+                </div>
+                <button id="settings-btn" class="settings-btn" title="System Prompt Settings">⚙️</button>
+            </div>
+            <div id="system-prompt-panel" class="system-prompt-panel" style="display: none;">
+                <label for="system-prompt-input">System Prompt:</label>
+                <textarea id="system-prompt-input" rows="6" placeholder="Enter system prompt..."></textarea>
+                <div class="system-prompt-actions">
+                    <button id="save-system-prompt-btn" class="save-btn">Save</button>
+                    <button id="reset-system-prompt-btn" class="reset-btn">Reset to Default</button>
+                    <button id="close-system-prompt-btn" class="close-btn">Close</button>
+                </div>
+            </div>
         </header>
 
         <main class="chat-container">

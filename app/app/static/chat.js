@@ -2,8 +2,93 @@ const messagesEl = document.getElementById("messages");
 const formEl = document.getElementById("chat-form");
 const inputEl = document.getElementById("message-input");
 const sendButtonEl = document.getElementById("send-button");
+const settingsBtn = document.getElementById("settings-btn");
+const systemPromptPanel = document.getElementById("system-prompt-panel");
+const systemPromptInput = document.getElementById("system-prompt-input");
+const saveSystemPromptBtn = document.getElementById("save-system-prompt-btn");
+const resetSystemPromptBtn = document.getElementById("reset-system-prompt-btn");
+const closeSystemPromptBtn = document.getElementById("close-system-prompt-btn");
 
-let conversation = [];
+// Default system prompt
+const defaultSystemPrompt = `Ты помощник-прокси между пользователем и системой.
+
+Твоя задача — сначала ПОНЯТЬ задачу, а потом решать.
+
+Формат ответа: обычный текст или Markdown.
+
+Если информации недостаточно, задай уточняющие вопросы.
+
+Если информации достаточно и можно решить задачу, предоставь подробное решение.
+
+Правила:
+- Не придумывай ответ на задачу, если нет данных — сперва задавай вопросы.
+- Когда считаешь, что вопросов достаточно, предоставь итоговый ответ.
+- Используй Markdown для форматирования (заголовки, списки, код и т.д.).`;
+
+// Load system prompt from localStorage or use default
+function getSystemPrompt() {
+  const saved = localStorage.getItem("systemPrompt");
+  return saved || defaultSystemPrompt;
+}
+
+function setSystemPrompt(prompt) {
+  localStorage.setItem("systemPrompt", prompt);
+  updateConversationSystemMessage(prompt);
+}
+
+function updateConversationSystemMessage(prompt) {
+  // Update or add system message in conversation
+  const systemIndex = conversation.findIndex(msg => msg.role === "system");
+  const systemMessage = { role: "system", content: prompt };
+  
+  if (systemIndex >= 0) {
+    conversation[systemIndex] = systemMessage;
+  } else {
+    conversation.unshift(systemMessage);
+  }
+}
+
+// Initialize conversation with system prompt
+let conversation = [
+  {
+    role: "system",
+    content: getSystemPrompt()
+  }
+];
+
+// Initialize system prompt input
+systemPromptInput.value = getSystemPrompt();
+
+// Settings panel toggle
+settingsBtn.addEventListener("click", () => {
+  const isVisible = systemPromptPanel.style.display !== "none";
+  systemPromptPanel.style.display = isVisible ? "none" : "block";
+  if (!isVisible) {
+    systemPromptInput.value = getSystemPrompt();
+  }
+});
+
+// Save system prompt
+saveSystemPromptBtn.addEventListener("click", () => {
+  const newPrompt = systemPromptInput.value.trim();
+  if (newPrompt) {
+    setSystemPrompt(newPrompt);
+    systemPromptPanel.style.display = "none";
+    appendSystem("System prompt updated successfully.");
+  }
+});
+
+// Reset to default
+resetSystemPromptBtn.addEventListener("click", () => {
+  systemPromptInput.value = defaultSystemPrompt;
+  setSystemPrompt(defaultSystemPrompt);
+  appendSystem("System prompt reset to default.");
+});
+
+// Close panel
+closeSystemPromptBtn.addEventListener("click", () => {
+  systemPromptPanel.style.display = "none";
+});
 
 function appendSystem(text) {
   const banner = document.createElement("div");
@@ -266,6 +351,9 @@ async function sendMessage(text) {
         const chatData = responseData.data;
         if (chatData.choices && chatData.choices[0] && chatData.choices[0].message) {
           const assistantMessage = chatData.choices[0].message;
+          
+          // Add assistant message to conversation history
+          // Ensure we maintain the full conversation including system, user, and assistant messages
           conversation.push(assistantMessage);
           
           // Display the message content with full response data available
