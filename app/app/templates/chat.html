@@ -19,6 +19,17 @@
             <div id="system-prompt-panel" class="system-prompt-panel" style="display: none;">
                 <label for="system-prompt-input">System Prompt:</label>
                 <textarea id="system-prompt-input" rows="6" placeholder="Enter system prompt..."></textarea>
+                
+                <label for="temperature-input">Temperature: <span id="temperature-value">0.7</span></label>
+                <div class="temperature-control">
+                    <input type="range" id="temperature-input" min="0" max="1" step="0.1" value="0.7" />
+                    <div class="temperature-labels">
+                        <span>0.0</span>
+                        <span>0.5</span>
+                        <span>1.0</span>
+                    </div>
+                </div>
+                
                 <div class="system-prompt-actions">
                     <button id="save-system-prompt-btn" class="save-btn">Save</button>
                     <button id="reset-system-prompt-btn" class="reset-btn">Reset to Default</button>

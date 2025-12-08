@@ -8,6 +8,8 @@ const systemPromptInput = document.getElementById("system-prompt-input");
 const saveSystemPromptBtn = document.getElementById("save-system-prompt-btn");
 const resetSystemPromptBtn = document.getElementById("reset-system-prompt-btn");
 const closeSystemPromptBtn = document.getElementById("close-system-prompt-btn");
+const temperatureInput = document.getElementById("temperature-input");
+const temperatureValue = document.getElementById("temperature-value");
 
 // Default system prompt
 const defaultSystemPrompt = `Ты помощник-прокси между пользователем и системой.
@@ -56,8 +58,30 @@ let conversation = [
   }
 ];
 
+// Temperature management
+function getTemperature() {
+  const saved = localStorage.getItem("temperature");
+  return saved !== null ? parseFloat(saved) : 0.7;
+}
+
+function setTemperature(value) {
+  localStorage.setItem("temperature", value.toString());
+}
+
 // Initialize system prompt input
 systemPromptInput.value = getSystemPrompt();
+
+// Initialize temperature
+const currentTemperature = getTemperature();
+temperatureInput.value = currentTemperature;
+temperatureValue.textContent = currentTemperature.toFixed(1);
+
+// Update temperature display when slider changes
+temperatureInput.addEventListener("input", (e) => {
+  const value = parseFloat(e.target.value);
+  temperatureValue.textContent = value.toFixed(1);
+  setTemperature(value);
+});
 
 // Settings panel toggle
 settingsBtn.addEventListener("click", () => {
@@ -65,6 +89,8 @@ settingsBtn.addEventListener("click", () => {
   systemPromptPanel.style.display = isVisible ? "none" : "block";
   if (!isVisible) {
     systemPromptInput.value = getSystemPrompt();
+    temperatureInput.value = getTemperature();
+    temperatureValue.textContent = getTemperature().toFixed(1);
   }
 });
 
@@ -82,7 +108,10 @@ saveSystemPromptBtn.addEventListener("click", () => {
 resetSystemPromptBtn.addEventListener("click", () => {
   systemPromptInput.value = defaultSystemPrompt;
   setSystemPrompt(defaultSystemPrompt);
-  appendSystem("System prompt reset to default.");
+  temperatureInput.value = 0.7;
+  temperatureValue.textContent = "0.7";
+  setTemperature(0.7);
+  appendSystem("System prompt and temperature reset to default.");
 });
 
 // Close panel
@@ -341,6 +370,7 @@ async function sendMessage(text) {
         },
         body: JSON.stringify({
           messages: conversation,
+          temperature: getTemperature(),
         }),
       });
 
