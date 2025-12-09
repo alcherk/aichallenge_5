@@ -75,6 +75,15 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
         
         # Assistant response is now plain text/markdown - no JSON formatting needed
         
+        # Extract token usage information
+        token_usage = None
+        if chat_response.usage:
+            token_usage = {
+                "prompt_tokens": chat_response.usage.prompt_tokens,
+                "completion_tokens": chat_response.usage.completion_tokens,
+                "total_tokens": chat_response.usage.total_tokens,
+            }
+        
         return StructuredResponse(
             success=True,
             status_code=200,
@@ -86,6 +95,7 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
                 "request_id": request_id,
                 "model": chat_response.model,
                 "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                "token_usage": token_usage,
             },
         )
     except httpx.HTTPStatusError as e:

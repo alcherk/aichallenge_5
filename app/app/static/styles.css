@@ -130,6 +130,35 @@ body {
     box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.5);
 }
 
+.model-select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(148, 163, 184, 0.5);
+    background-color: rgba(2, 6, 23, 0.96);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    cursor: pointer;
+}
+
+.model-select:hover {
+    border-color: rgba(56, 189, 248, 0.6);
+}
+
+.model-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.5);
+}
+
+.model-select option {
+    background-color: rgba(15, 23, 42, 0.98);
+    color: var(--text-primary);
+    padding: 8px;
+}
+
 .temperature-control {
     display: flex;
     flex-direction: column;
@@ -558,6 +587,16 @@ pre, code {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
+}
+
+.message-stats {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.8;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: normal;
 }
 
 .message-time {

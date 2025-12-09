@@ -10,6 +10,7 @@ const resetSystemPromptBtn = document.getElementById("reset-system-prompt-btn");
 const closeSystemPromptBtn = document.getElementById("close-system-prompt-btn");
 const temperatureInput = document.getElementById("temperature-input");
 const temperatureValue = document.getElementById("temperature-value");
+const modelSelect = document.getElementById("model-select");
 
 // Default system prompt
 const defaultSystemPrompt = `Ты помощник-прокси между пользователем и системой.
@@ -68,6 +69,16 @@ function setTemperature(value) {
   localStorage.setItem("temperature", value.toString());
 }
 
+// Model management
+function getModel() {
+  const saved = localStorage.getItem("model");
+  return saved || "gpt-4o-mini";
+}
+
+function setModel(value) {
+  localStorage.setItem("model", value);
+}
+
 // Initialize system prompt input
 systemPromptInput.value = getSystemPrompt();
 
@@ -76,11 +87,20 @@ const currentTemperature = getTemperature();
 temperatureInput.value = currentTemperature;
 temperatureValue.textContent = currentTemperature.toFixed(1);
 
+// Initialize model select
+const currentModel = getModel();
+modelSelect.value = currentModel;
+
 // Update temperature display when slider changes
 temperatureInput.addEventListener("input", (e) => {
   const value = parseFloat(e.target.value);
   temperatureValue.textContent = value.toFixed(1);
   setTemperature(value);
+});
+
+// Update model when select changes
+modelSelect.addEventListener("change", (e) => {
+  setModel(e.target.value);
 });
 
 // Settings panel toggle
@@ -91,6 +111,7 @@ settingsBtn.addEventListener("click", () => {
     systemPromptInput.value = getSystemPrompt();
     temperatureInput.value = getTemperature();
     temperatureValue.textContent = getTemperature().toFixed(1);
+    modelSelect.value = getModel();
   }
 });
 
@@ -111,7 +132,9 @@ resetSystemPromptBtn.addEventListener("click", () => {
   temperatureInput.value = 0.7;
   temperatureValue.textContent = "0.7";
   setTemperature(0.7);
-  appendSystem("System prompt and temperature reset to default.");
+  modelSelect.value = "gpt-4o-mini";
+  setModel("gpt-4o-mini");
+  appendSystem("System prompt, temperature, and model reset to default.");
 });
 
 // Close panel
@@ -289,6 +312,33 @@ function appendMessage(role, content, fullResponseData = null) {
   roleEl.textContent = role === "user" ? "You" : "Assistant";
 
   meta.appendChild(roleEl);
+  
+  // Add statistics for assistant messages
+  if (role === "assistant" && fullResponseData && fullResponseData.metadata) {
+    const stats = document.createElement("div");
+    stats.className = "message-stats";
+    
+    const metadata = fullResponseData.metadata;
+    const statsItems = [];
+    
+    if (metadata.model) {
+      statsItems.push(`Model: ${metadata.model}`);
+    }
+    
+    if (metadata.processing_time_ms !== undefined) {
+      statsItems.push(`Time: ${metadata.processing_time_ms}ms`);
+    }
+    
+    if (metadata.token_usage) {
+      const usage = metadata.token_usage;
+      statsItems.push(`Tokens: ${usage.total_tokens} (${usage.prompt_tokens}+${usage.completion_tokens})`);
+    }
+    
+    if (statsItems.length > 0) {
+      stats.textContent = statsItems.join(" · ");
+      meta.appendChild(stats);
+    }
+  }
 
   const contentEl = document.createElement("div");
   
@@ -371,6 +421,7 @@ async function sendMessage(text) {
         body: JSON.stringify({
           messages: conversation,
           temperature: getTemperature(),
+          model: getModel(),
         }),
       });
 
