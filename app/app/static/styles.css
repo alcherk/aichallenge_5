@@ -23,15 +23,20 @@ body {
     background: radial-gradient(circle at top, #172554 0, #020617 45%, #020617 100%);
     color: var(--text-primary);
     min-height: 100vh;
+}
+
+.app-layout {
     display: flex;
-    align-items: stretch;
-    justify-content: center;
+    min-height: 100vh;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1400px;
+    margin: 0 auto;
 }
 
 .app-container {
-    width: 100%;
-    max-width: 960px;
-    margin: 16px;
+    flex: 1;
+    min-width: 0;
     padding: 16px 16px 12px;
     border-radius: 20px;
     background: radial-gradient(circle at 0 0, rgba(56, 189, 248, 0.12), transparent 55%),
@@ -705,7 +710,187 @@ pre, code {
     padding: 0 4px;
 }
 
+.metrics-panel {
+    width: 280px;
+    min-width: 280px;
+    padding: 16px;
+    border-radius: 20px;
+    background: radial-gradient(circle at 0 0, rgba(56, 189, 248, 0.12), transparent 55%),
+                radial-gradient(circle at 100% 100%, rgba(94, 234, 212, 0.1), transparent 55%),
+                linear-gradient(to bottom right, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.98));
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    box-shadow:
+        0 18px 45px rgba(15, 23, 42, 0.8),
+        0 0 0 1px rgba(15, 23, 42, 0.6);
+    display: flex;
+    flex-direction: column;
+    height: fit-content;
+    max-height: calc(100vh - 32px);
+    position: sticky;
+    top: 16px;
+}
+
+.metrics-panel.hidden {
+    display: none;
+}
+
+.metrics-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.metrics-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.toggle-metrics-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.toggle-metrics-btn:hover {
+    background: rgba(148, 163, 184, 0.2);
+    color: var(--text-primary);
+}
+
+.metrics-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+}
+
+.metric-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.metric-item:last-of-type {
+    border-bottom: none;
+}
+
+.metric-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.metric-value {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-family: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", "Courier New", monospace;
+    text-align: right;
+}
+
+.metrics-divider {
+    height: 1px;
+    background: rgba(148, 163, 184, 0.35);
+    margin: 8px 0;
+}
+
+.reset-metrics-btn {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: rgba(248, 113, 113, 0.2);
+    border: 1px solid rgba(248, 113, 113, 0.4);
+    border-radius: 6px;
+    color: #fecaca;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.reset-metrics-btn:hover {
+    background: rgba(248, 113, 113, 0.3);
+    transform: translateY(-1px);
+}
+
+.show-metrics-btn {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #0ea5e9, #22c55e);
+    border: none;
+    color: white;
+    font-size: 20px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(56, 189, 248, 0.4);
+    transition: all 0.2s ease;
+    display: none;
+    z-index: 1000;
+}
+
+.show-metrics-btn:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 16px rgba(56, 189, 248, 0.6);
+}
+
+@media (max-width: 1024px) {
+    .app-layout {
+        flex-direction: column;
+    }
+    
+    .metrics-panel {
+        width: 100%;
+        max-height: 400px;
+        position: relative;
+        top: 0;
+    }
+    
+    .show-metrics-btn {
+        display: block;
+    }
+    
+    .metrics-panel.hidden {
+        display: none;
+    }
+}
+
 @media (max-width: 640px) {
+    .app-layout {
+        padding: 12px;
+        gap: 12px;
+    }
+    
+    .app-container {
+        margin: 0;
+        padding: 12px 10px 10px;
+        border-radius: 18px;
+    }
+    
+    .metrics-panel {
+        border-radius: 18px;
+        padding: 12px;
+    }
     .app-container {
         margin: 12px;
         padding: 12px 10px 10px;

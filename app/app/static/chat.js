@@ -11,6 +11,24 @@ const closeSystemPromptBtn = document.getElementById("close-system-prompt-btn");
 const temperatureInput = document.getElementById("temperature-input");
 const temperatureValue = document.getElementById("temperature-value");
 const modelSelect = document.getElementById("model-select");
+const metricsPanel = document.getElementById("metrics-panel");
+const toggleMetricsBtn = document.getElementById("toggle-metrics-btn");
+const showMetricsBtn = document.getElementById("show-metrics-btn");
+const resetMetricsBtn = document.getElementById("reset-metrics-btn");
+
+// Metrics elements
+const metricModel = document.getElementById("metric-model");
+const metricProvider = document.getElementById("metric-provider");
+const metricInputTokens = document.getElementById("metric-input-tokens");
+const metricOutputTokens = document.getElementById("metric-output-tokens");
+const metricTotalTokens = document.getElementById("metric-total-tokens");
+const metricCost = document.getElementById("metric-cost");
+const metricResponseTime = document.getElementById("metric-response-time");
+const metricTotalRequests = document.getElementById("metric-total-requests");
+const metricTotalCost = document.getElementById("metric-total-cost");
+const metricContextWindow = document.getElementById("metric-context-window");
+const metricContextUsage = document.getElementById("metric-context-usage");
+const metricContextUsagePercent = document.getElementById("metric-context-usage-percent");
 
 // Default system prompt
 const defaultSystemPrompt = `Ты помощник-прокси между пользователем и системой.
@@ -90,6 +108,152 @@ temperatureValue.textContent = currentTemperature.toFixed(1);
 // Initialize model select
 const currentModel = getModel();
 modelSelect.value = currentModel;
+
+// Cost calculation based on OpenAI pricing (as of 2024)
+function getModelPricing(model) {
+  const pricing = {
+    "gpt-4o": { input: 2.50, output: 10.00 }, // per 1M tokens
+    "gpt-4-turbo": { input: 10.00, output: 30.00 },
+    "gpt-4": { input: 30.00, output: 60.00 },
+    "gpt-4o-mini": { input: 0.15, output: 0.60 },
+    "gpt-3.5-turbo": { input: 0.50, output: 1.50 },
+  };
+  return pricing[model] || pricing["gpt-4o-mini"];
+}
+
+// Context window limits for OpenAI models
+function getContextWindow(model) {
+  const contextWindows = {
+    "gpt-4o": 128000,
+    "gpt-4-turbo": 128000,
+    "gpt-4": 8192,
+    "gpt-4o-mini": 128000,
+    "gpt-3.5-turbo": 16385,
+  };
+  return contextWindows[model] || contextWindows["gpt-4o-mini"];
+}
+
+// Calculate total tokens in conversation history
+function calculateConversationTokens() {
+  // Estimate tokens: roughly 4 characters per token for English text
+  // This is a rough estimate - actual tokenization would require the API
+  let totalTokens = 0;
+  conversation.forEach(msg => {
+    if (msg.content) {
+      // Rough estimate: ~4 chars per token
+      totalTokens += Math.ceil(msg.content.length / 4);
+    }
+  });
+  return totalTokens;
+}
+
+function calculateCost(model, inputTokens, outputTokens) {
+  const pricing = getModelPricing(model);
+  const inputCost = (inputTokens / 1000000) * pricing.input;
+  const outputCost = (outputTokens / 1000000) * pricing.output;
+  return inputCost + outputCost;
+}
+
+// Metrics management
+function getTotalMetrics() {
+  const saved = localStorage.getItem("totalMetrics");
+  return saved ? JSON.parse(saved) : { requests: 0, totalCost: 0 };
+}
+
+function setTotalMetrics(metrics) {
+  localStorage.setItem("totalMetrics", JSON.stringify(metrics));
+}
+
+function updateMetrics(responseData) {
+  if (!responseData.success || !responseData.metadata) return;
+  
+  const metadata = responseData.metadata;
+  const tokenUsage = metadata.token_usage;
+  const model = metadata.model || getModel();
+  
+  // Update current metrics
+  if (metadata.model) {
+    metricModel.textContent = model;
+  }
+  metricProvider.textContent = "OpenAI";
+  
+  // Update context window
+  const contextWindow = getContextWindow(model);
+  metricContextWindow.textContent = `${(contextWindow / 1000).toFixed(0)}k`;
+  
+  if (tokenUsage) {
+    metricInputTokens.textContent = tokenUsage.prompt_tokens.toLocaleString();
+    metricOutputTokens.textContent = tokenUsage.completion_tokens.toLocaleString();
+    metricTotalTokens.textContent = tokenUsage.total_tokens.toLocaleString();
+    
+    // Calculate cost
+    const cost = calculateCost(
+      model,
+      tokenUsage.prompt_tokens,
+      tokenUsage.completion_tokens
+    );
+    metricCost.textContent = `$${cost.toFixed(6)}`;
+    
+    // Update context usage (use prompt_tokens as it represents the full context sent)
+    const contextUsage = tokenUsage.prompt_tokens;
+    metricContextUsage.textContent = contextUsage.toLocaleString();
+    
+    // Calculate context usage percentage
+    const contextUsagePercent = (contextUsage / contextWindow) * 100;
+    metricContextUsagePercent.textContent = `${contextUsagePercent.toFixed(2)}%`;
+    
+    // Update total metrics
+    const totals = getTotalMetrics();
+    totals.requests += 1;
+    totals.totalCost += cost;
+    setTotalMetrics(totals);
+    
+    metricTotalRequests.textContent = totals.requests.toLocaleString();
+    metricTotalCost.textContent = `$${totals.totalCost.toFixed(6)}`;
+  }
+  
+  if (metadata.processing_time_ms !== undefined) {
+    metricResponseTime.textContent = `${metadata.processing_time_ms}ms`;
+  }
+}
+
+// Initialize metrics panel
+const totals = getTotalMetrics();
+metricTotalRequests.textContent = totals.requests.toLocaleString();
+metricTotalCost.textContent = `$${totals.totalCost.toFixed(6)}`;
+
+// Initialize context window display
+const initialModel = getModel();
+const initialContextWindow = getContextWindow(initialModel);
+metricContextWindow.textContent = `${(initialContextWindow / 1000).toFixed(0)}k`;
+
+// Metrics panel toggle
+toggleMetricsBtn.addEventListener("click", () => {
+  metricsPanel.classList.add("hidden");
+  showMetricsBtn.style.display = "block";
+});
+
+showMetricsBtn.addEventListener("click", () => {
+  metricsPanel.classList.remove("hidden");
+  showMetricsBtn.style.display = "none";
+});
+
+// Reset metrics
+resetMetricsBtn.addEventListener("click", () => {
+  if (confirm("Reset all metrics? This cannot be undone.")) {
+    setTotalMetrics({ requests: 0, totalCost: 0 });
+    metricTotalRequests.textContent = "0";
+    metricTotalCost.textContent = "$0.000";
+    metricModel.textContent = "-";
+    metricInputTokens.textContent = "0";
+    metricOutputTokens.textContent = "0";
+    metricTotalTokens.textContent = "0";
+    metricCost.textContent = "$0.000";
+    metricResponseTime.textContent = "-";
+    metricContextUsage.textContent = "0";
+    metricContextUsagePercent.textContent = "0%";
+  }
+});
 
 // Update temperature display when slider changes
 temperatureInput.addEventListener("input", (e) => {
@@ -439,6 +603,9 @@ async function sendMessage(text) {
           
           // Display the message content with full response data available
           appendMessage("assistant", assistantMessage.content, responseData);
+          
+          // Update metrics panel
+          updateMetrics(responseData);
         } else {
           appendError("Unexpected data format in successful response.");
         }
