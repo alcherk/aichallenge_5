@@ -11,6 +11,8 @@ const closeSystemPromptBtn = document.getElementById("close-system-prompt-btn");
 const temperatureInput = document.getElementById("temperature-input");
 const temperatureValue = document.getElementById("temperature-value");
 const modelSelect = document.getElementById("model-select");
+const compressionThresholdInput = document.getElementById("compression-threshold-input");
+const compressionThresholdValue = document.getElementById("compression-threshold-value");
 const metricsPanel = document.getElementById("metrics-panel");
 const toggleMetricsBtn = document.getElementById("toggle-metrics-btn");
 const showMetricsBtn = document.getElementById("show-metrics-btn");
@@ -77,6 +79,9 @@ let conversation = [
   }
 ];
 
+// Message counter for compression (excludes system message)
+let messageCount = 0;
+
 // Temperature management
 function getTemperature() {
   const saved = localStorage.getItem("temperature");
@@ -97,6 +102,82 @@ function setModel(value) {
   localStorage.setItem("model", value);
 }
 
+// Compression threshold management
+function getCompressionThreshold() {
+  const saved = localStorage.getItem("compressionThreshold");
+  return saved !== null ? parseInt(saved) : 10;
+}
+
+function setCompressionThreshold(value) {
+  localStorage.setItem("compressionThreshold", value.toString());
+}
+
+// Compress conversation history by summarizing old messages
+async function compressConversation() {
+  // Get messages to summarize (everything except system message)
+  const messagesToSummarize = conversation.slice(1); // Skip system message
+  
+  if (messagesToSummarize.length === 0) {
+    return; // Nothing to compress
+  }
+  
+  // Create a summary prompt
+  const summaryPrompt = `Please provide a concise summary of the following conversation history. The summary should capture:
+- Key topics discussed
+- Important decisions or conclusions reached
+- Any context that would be needed to continue the conversation naturally
+
+Conversation history:
+${messagesToSummarize.map(msg => `${msg.role}: ${msg.content}`).join('\n\n')}
+
+Provide a clear, concise summary that preserves essential context:`;
+
+  try {
+    // Call API to get summary
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: "You are a helpful assistant that summarizes conversations concisely while preserving important context." },
+          { role: "user", content: summaryPrompt }
+        ],
+        temperature: 0.3, // Lower temperature for more consistent summaries
+        model: getModel(),
+      }),
+    });
+
+    const responseData = await res.json();
+
+    if (responseData.success && responseData.data && responseData.data.choices && responseData.data.choices[0]) {
+      const summaryContent = responseData.data.choices[0].message.content;
+      
+      // Replace old messages with summary (keep system message)
+      conversation = [
+        conversation[0], // Keep system message
+        {
+          role: "assistant",
+          content: `[Conversation Summary]\n\n${summaryContent}`
+        }
+      ];
+      
+      // Reset message count
+      messageCount = 1; // The summary counts as 1 message
+      
+      // Show notification
+      appendSystem("Conversation history compressed. Previous messages summarized.");
+    } else {
+      console.error("Failed to compress conversation:", responseData);
+      appendSystem("Failed to compress conversation history. Continuing with full history.");
+    }
+  } catch (error) {
+    console.error("Error compressing conversation:", error);
+    appendSystem("Error compressing conversation history. Continuing with full history.");
+  }
+}
+
 // Initialize system prompt input
 systemPromptInput.value = getSystemPrompt();
 
@@ -108,6 +189,18 @@ temperatureValue.textContent = currentTemperature.toFixed(1);
 // Initialize model select
 const currentModel = getModel();
 modelSelect.value = currentModel;
+
+// Initialize compression threshold
+const currentCompressionThreshold = getCompressionThreshold();
+compressionThresholdInput.value = currentCompressionThreshold;
+compressionThresholdValue.textContent = currentCompressionThreshold;
+
+// Update compression threshold display when slider changes
+compressionThresholdInput.addEventListener("input", (e) => {
+  const value = parseInt(e.target.value);
+  compressionThresholdValue.textContent = value;
+  setCompressionThreshold(value);
+});
 
 // Cost calculation based on OpenAI pricing (as of 2024)
 function getModelPricing(model) {
@@ -276,6 +369,8 @@ settingsBtn.addEventListener("click", () => {
     temperatureInput.value = getTemperature();
     temperatureValue.textContent = getTemperature().toFixed(1);
     modelSelect.value = getModel();
+    compressionThresholdInput.value = getCompressionThreshold();
+    compressionThresholdValue.textContent = getCompressionThreshold();
   }
 });
 
@@ -298,7 +393,10 @@ resetSystemPromptBtn.addEventListener("click", () => {
   setTemperature(0.7);
   modelSelect.value = "gpt-4o-mini";
   setModel("gpt-4o-mini");
-  appendSystem("System prompt, temperature, and model reset to default.");
+  compressionThresholdInput.value = 10;
+  compressionThresholdValue.textContent = "10";
+  setCompressionThreshold(10);
+  appendSystem("System prompt, temperature, model, and compression threshold reset to default.");
 });
 
 // Close panel
@@ -571,7 +669,16 @@ function appendMessage(role, content, fullResponseData = null) {
 async function sendMessage(text) {
   const userMessage = { role: "user", content: text };
   conversation.push(userMessage);
+  messageCount++;
   appendMessage("user", text);
+
+  // Check if compression is needed before sending
+  const threshold = getCompressionThreshold();
+  if (messageCount >= threshold) {
+    sendButtonEl.disabled = true;
+    sendButtonEl.textContent = "Compressing...";
+    await compressConversation();
+  }
 
   sendButtonEl.disabled = true;
   sendButtonEl.textContent = "Sending...";
@@ -600,6 +707,7 @@ async function sendMessage(text) {
           // Add assistant message to conversation history
           // Ensure we maintain the full conversation including system, user, and assistant messages
           conversation.push(assistantMessage);
+          messageCount++; // Increment count for assistant message
           
           // Display the message content with full response data available
           appendMessage("assistant", assistantMessage.content, responseData);

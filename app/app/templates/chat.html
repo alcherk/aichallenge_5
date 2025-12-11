@@ -100,6 +100,16 @@
                     </div>
                 </div>
                 
+                <label for="compression-threshold-input">Compression Threshold: <span id="compression-threshold-value">10</span> messages</label>
+                <div class="compression-control">
+                    <input type="range" id="compression-threshold-input" min="5" max="50" step="5" value="10" />
+                    <div class="compression-labels">
+                        <span>5</span>
+                        <span>27</span>
+                        <span>50</span>
+                    </div>
+                </div>
+                
                 <div class="system-prompt-actions">
                     <button id="save-system-prompt-btn" class="save-btn">Save</button>
                     <button id="reset-system-prompt-btn" class="reset-btn">Reset to Default</button>

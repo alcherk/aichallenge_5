@@ -164,17 +164,20 @@ body {
     padding: 8px;
 }
 
-.temperature-control {
+.temperature-control,
+.compression-control {
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
-.temperature-control label {
+.temperature-control label,
+.compression-control label {
     margin-bottom: 4px;
 }
 
-#temperature-input {
+#temperature-input,
+#compression-threshold-input {
     width: 100%;
     height: 6px;
     border-radius: 3px;
@@ -184,7 +187,8 @@ body {
     appearance: none;
 }
 
-#temperature-input::-webkit-slider-thumb {
+#temperature-input::-webkit-slider-thumb,
+#compression-threshold-input::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
     width: 16px;
@@ -197,12 +201,14 @@ body {
     transition: all 0.2s ease;
 }
 
-#temperature-input::-webkit-slider-thumb:hover {
+#temperature-input::-webkit-slider-thumb:hover,
+#compression-threshold-input::-webkit-slider-thumb:hover {
     transform: scale(1.1);
     box-shadow: 0 4px 8px rgba(56, 189, 248, 0.5);
 }
 
-#temperature-input::-moz-range-thumb {
+#temperature-input::-moz-range-thumb,
+#compression-threshold-input::-moz-range-thumb {
     width: 16px;
     height: 16px;
     border-radius: 50%;
@@ -213,12 +219,14 @@ body {
     transition: all 0.2s ease;
 }
 
-#temperature-input::-moz-range-thumb:hover {
+#temperature-input::-moz-range-thumb:hover,
+#compression-threshold-input::-moz-range-thumb:hover {
     transform: scale(1.1);
     box-shadow: 0 4px 8px rgba(56, 189, 248, 0.5);
 }
 
-.temperature-labels {
+.temperature-labels,
+.compression-labels {
     display: flex;
     justify-content: space-between;
     font-size: 10px;
@@ -226,7 +234,8 @@ body {
     padding: 0 2px;
 }
 
-#temperature-value {
+#temperature-value,
+#compression-threshold-value {
     color: var(--accent);
     font-weight: 600;
 }
