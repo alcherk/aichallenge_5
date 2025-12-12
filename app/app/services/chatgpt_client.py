@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 import httpx
@@ -77,3 +78,80 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
         data = response.json()
 
     return ChatResponse(**data)
+
+
+async def stream_chatgpt(payload: ChatRequest):
+    """
+    Yields decoded streaming chunks from OpenAI chat.completions.
+    Each yielded item is a dict like the non-streaming response chunks:
+    - {"choices":[{"delta":{"content":"..."}, ...}], ...}
+    """
+    settings = get_settings()
+
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+
+    headers = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    messages = [m.dict() for m in payload.messages]
+
+    has_system_message = any(msg.get("role") == "system" for msg in messages)
+    if not has_system_message:
+        system_prompt = """Ты помощник-прокси между пользователем и системой.
+
+Твоя задача — сначала ПОНЯТЬ задачу, а потом решать.
+
+Формат ответа: обычный текст или Markdown.
+
+Если информации недостаточно, задай уточняющие вопросы.
+
+Если информации достаточно и можно решить задачу, предоставь подробное решение.
+
+Правила:
+- Не придумывай ответ на задачу, если нет данных — сперва задавай вопросы.
+- Когда считаешь, что вопросов достаточно, предоставь итоговый ответ.
+- Используй Markdown для форматирования (заголовки, списки, код и т.д.)."""
+
+        messages.insert(
+            0,
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+        )
+
+    body: Dict[str, Any] = {
+        "model": payload.model or settings.openai_model,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+    if payload.temperature is not None:
+        body["temperature"] = payload.temperature
+    if payload.max_tokens is not None:
+        body["max_tokens"] = payload.max_tokens
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with client.stream(
+            "POST",
+            f"{settings.openai_api_base}/chat/completions",
+            json=body,
+            headers=headers,
+        ) as response:
+            response.raise_for_status()
+
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    return
+
+                yield json.loads(data)

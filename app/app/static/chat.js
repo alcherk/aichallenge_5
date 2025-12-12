@@ -2,6 +2,7 @@ const messagesEl = document.getElementById("messages");
 const formEl = document.getElementById("chat-form");
 const inputEl = document.getElementById("message-input");
 const sendButtonEl = document.getElementById("send-button");
+const newChatBtn = document.getElementById("new-chat-btn");
 const settingsBtn = document.getElementById("settings-btn");
 const systemPromptPanel = document.getElementById("system-prompt-panel");
 const systemPromptInput = document.getElementById("system-prompt-input");
@@ -54,6 +55,84 @@ function getSystemPrompt() {
   return saved || defaultSystemPrompt;
 }
 
+const STORAGE_KEYS = {
+  conversation: "chatConversationV1",
+  messageCount: "chatMessageCountV1",
+};
+
+function isValidMessage(message) {
+  if (!message || typeof message !== "object") return false;
+  if (message.role !== "system" && message.role !== "user" && message.role !== "assistant") return false;
+  if (typeof message.content !== "string") return false;
+  return true;
+}
+
+function getDefaultConversation() {
+  return [{ role: "system", content: getSystemPrompt() }];
+}
+
+function loadConversationFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.conversation);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+
+    const cleaned = parsed.filter(isValidMessage);
+    if (cleaned.length === 0) return null;
+
+    return cleaned;
+  } catch {
+    return null;
+  }
+}
+
+function persistConversation() {
+  try {
+    localStorage.setItem(STORAGE_KEYS.conversation, JSON.stringify(conversation));
+    localStorage.setItem(STORAGE_KEYS.messageCount, messageCount.toString());
+  } catch {
+    // Ignore storage failures (e.g., disabled storage/quota)
+  }
+}
+
+function clearPersistedConversation() {
+  try {
+    localStorage.removeItem(STORAGE_KEYS.conversation);
+    localStorage.removeItem(STORAGE_KEYS.messageCount);
+  } catch {
+    // Ignore storage failures
+  }
+}
+
+function resetCurrentMetricsDisplay() {
+  metricModel.textContent = "-";
+  metricInputTokens.textContent = "0";
+  metricOutputTokens.textContent = "0";
+  metricTotalTokens.textContent = "0";
+  metricCost.textContent = "$0.000";
+  metricResponseTime.textContent = "-";
+  metricContextUsage.textContent = "0";
+  metricContextUsagePercent.textContent = "0%";
+}
+
+function renderConversationFromState() {
+  messagesEl.innerHTML = "";
+
+  for (const msg of conversation) {
+    if (!isValidMessage(msg)) continue;
+    if (msg.role === "system") continue;
+    appendMessage(msg.role, msg.content);
+  }
+
+  if (conversation.length > 1) {
+    appendSystem("Loaded your previous chat from this browser.");
+  } else {
+    appendSystem("You are connected to the ChatGPT proxy. Messages are not persisted server-side.");
+  }
+}
+
 function setSystemPrompt(prompt) {
   localStorage.setItem("systemPrompt", prompt);
   updateConversationSystemMessage(prompt);
@@ -69,6 +148,8 @@ function updateConversationSystemMessage(prompt) {
   } else {
     conversation.unshift(systemMessage);
   }
+
+  persistConversation();
 }
 
 // Initialize conversation with system prompt
@@ -81,6 +162,14 @@ let conversation = [
 
 // Message counter for compression (excludes system message)
 let messageCount = 0;
+
+// Load saved conversation (if any) and ensure current system prompt is applied
+const loadedConversation = loadConversationFromStorage();
+if (loadedConversation) {
+  conversation = loadedConversation;
+}
+updateConversationSystemMessage(getSystemPrompt());
+messageCount = Math.max(0, conversation.filter(m => m && m.role !== "system").length);
 
 // Temperature management
 function getTemperature() {
@@ -168,6 +257,7 @@ Provide a clear, concise summary that preserves essential context:`;
       
       // Show notification
       appendSystem("Conversation history compressed. Previous messages summarized.");
+      persistConversation();
     } else {
       console.error("Failed to compress conversation:", responseData);
       appendSystem("Failed to compress conversation history. Continuing with full history.");
@@ -358,6 +448,19 @@ temperatureInput.addEventListener("input", (e) => {
 // Update model when select changes
 modelSelect.addEventListener("change", (e) => {
   setModel(e.target.value);
+});
+
+newChatBtn.addEventListener("click", () => {
+  if (!confirm("Start a new chat? This clears the saved conversation history for this browser.")) {
+    return;
+  }
+
+  conversation = getDefaultConversation();
+  messageCount = 0;
+  clearPersistedConversation();
+  persistConversation();
+  resetCurrentMetricsDisplay();
+  renderConversationFromState();
 });
 
 // Settings panel toggle
@@ -671,6 +774,7 @@ async function sendMessage(text) {
   conversation.push(userMessage);
   messageCount++;
   appendMessage("user", text);
+  persistConversation();
 
   // Check if compression is needed before sending
   const threshold = getCompressionThreshold();
@@ -683,52 +787,203 @@ async function sendMessage(text) {
   sendButtonEl.disabled = true;
   sendButtonEl.textContent = "Sending...";
 
-    try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          messages: conversation,
-          temperature: getTemperature(),
-          model: getModel(),
-        }),
-      });
+  function appendStreamingAssistant() {
+    const row = document.createElement("div");
+    row.className = "message-row assistant";
 
-      const responseData = await res.json();
+    const bubble = document.createElement("div");
+    bubble.className = "message-bubble assistant";
 
-      // Handle structured response format
-      if (responseData.success && responseData.data) {
-        const chatData = responseData.data;
-        if (chatData.choices && chatData.choices[0] && chatData.choices[0].message) {
-          const assistantMessage = chatData.choices[0].message;
-          
-          // Add assistant message to conversation history
-          // Ensure we maintain the full conversation including system, user, and assistant messages
-          conversation.push(assistantMessage);
-          messageCount++; // Increment count for assistant message
-          
-          // Display the message content with full response data available
-          appendMessage("assistant", assistantMessage.content, responseData);
-          
-          // Update metrics panel
-          updateMetrics(responseData);
-        } else {
-          appendError("Unexpected data format in successful response.");
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+
+    const roleEl = document.createElement("span");
+    roleEl.className = "message-role";
+    roleEl.textContent = "Assistant";
+    meta.appendChild(roleEl);
+
+    const contentEl = document.createElement("div");
+    contentEl.className = "markdown-content";
+
+    bubble.appendChild(meta);
+    bubble.appendChild(contentEl);
+    row.appendChild(bubble);
+    messagesEl.appendChild(row);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+
+    return { bubble, meta, contentEl };
+  }
+
+  function parseSSEEvents(textChunk, state) {
+    state.buffer += textChunk.replace(/\r/g, "");
+    const events = [];
+
+    let splitIndex;
+    while ((splitIndex = state.buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = state.buffer.slice(0, splitIndex);
+      state.buffer = state.buffer.slice(splitIndex + 2);
+
+      const lines = rawEvent.split("\n");
+      let eventName = "message";
+      const dataLines = [];
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          eventName = line.slice("event:".length).trim();
+        } else if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).trim());
         }
-      } else {
-        // Handle error in structured response
-        const errorMsg = responseData.error?.detail || responseData.message || `Request failed with status ${res.status}`;
+      }
+
+      const dataRaw = dataLines.join("\n");
+      if (!dataRaw) continue;
+
+      try {
+        events.push({ event: eventName, data: JSON.parse(dataRaw) });
+      } catch {
+        events.push({ event: eventName, data: { raw: dataRaw } });
+      }
+    }
+
+    return events;
+  }
+
+  let assistantText = "";
+  let lastDoneStructuredResponse = null;
+  const { meta: assistantMetaEl, contentEl: assistantContentEl, bubble: assistantBubbleEl } = appendStreamingAssistant();
+
+  let scheduled = false;
+  const renderAssistant = () => {
+    scheduled = false;
+    assistantContentEl.innerHTML = formatMarkdown(assistantText);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  };
+  const scheduleRender = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(renderAssistant);
+  };
+
+  try {
+    const res = await fetch("/api/chat/stream", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      },
+      body: JSON.stringify({
+        messages: conversation,
+        temperature: getTemperature(),
+        model: getModel(),
+      }),
+    });
+
+    if (!res.ok || !res.body) {
+      assistantBubbleEl.closest(".message-row")?.remove?.();
+      appendError(`Request failed with status ${res.status}`);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    const sseState = { buffer: "" };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      const events = parseSSEEvents(text, sseState);
+
+      for (const evt of events) {
+        if (evt.event === "chunk" && evt.data && typeof evt.data.delta === "string") {
+          assistantText += evt.data.delta;
+          scheduleRender();
+        } else if (evt.event === "done") {
+          lastDoneStructuredResponse = evt.data;
+        } else if (evt.event === "error") {
+          const errorMsg = evt.data?.error?.detail || evt.data?.message || "Streaming error.";
+          appendError(errorMsg);
+        }
+      }
+    }
+
+    for (const evt of parseSSEEvents("\n\n", sseState)) {
+      if (evt.event === "chunk" && evt.data && typeof evt.data.delta === "string") {
+        assistantText += evt.data.delta;
+      } else if (evt.event === "done") {
+        lastDoneStructuredResponse = evt.data;
+      } else if (evt.event === "error") {
+        const errorMsg = evt.data?.error?.detail || evt.data?.message || "Streaming error.";
         appendError(errorMsg);
       }
-    } catch (err) {
-      console.error(err);
-      appendError("Network or server error while contacting the proxy.");
-    } finally {
-      sendButtonEl.disabled = false;
-      sendButtonEl.textContent = "Send";
     }
+
+    renderAssistant();
+
+    if (assistantText.trim()) {
+      const assistantMessage = { role: "assistant", content: assistantText };
+      conversation.push(assistantMessage);
+      messageCount++;
+      persistConversation();
+    }
+
+    if (lastDoneStructuredResponse) {
+      updateMetrics(lastDoneStructuredResponse);
+
+      if (lastDoneStructuredResponse.metadata) {
+        const stats = document.createElement("div");
+        stats.className = "message-stats";
+
+        const metadata = lastDoneStructuredResponse.metadata;
+        const statsItems = [];
+        if (metadata.model) {
+          statsItems.push(`Model: ${metadata.model}`);
+        }
+        if (metadata.processing_time_ms !== undefined) {
+          statsItems.push(`Time: ${metadata.processing_time_ms}ms`);
+        }
+        if (metadata.token_usage) {
+          const usage = metadata.token_usage;
+          if (usage && usage.total_tokens !== undefined) {
+            statsItems.push(`Tokens: ${usage.total_tokens} (${usage.prompt_tokens}+${usage.completion_tokens})`);
+          }
+        }
+
+        if (statsItems.length > 0) {
+          stats.textContent = statsItems.join(" · ");
+          assistantMetaEl.appendChild(stats);
+        }
+      }
+
+      const showFullBtn = document.createElement("button");
+      showFullBtn.className = "show-full-response-btn";
+      showFullBtn.textContent = "Show Full Response";
+      showFullBtn.onclick = () => {
+        const fullResponseEl = document.createElement("div");
+        fullResponseEl.className = "full-response-json";
+        const pre = document.createElement("pre");
+        const code = document.createElement("code");
+        code.innerHTML = syntaxHighlightJSON(JSON.stringify(lastDoneStructuredResponse, null, 2));
+        pre.appendChild(code);
+        fullResponseEl.appendChild(pre);
+
+        const existing = assistantBubbleEl.querySelector(".full-response-json");
+        if (existing) {
+          existing.remove();
+          showFullBtn.textContent = "Show Full Response";
+        } else {
+          assistantBubbleEl.appendChild(fullResponseEl);
+          showFullBtn.textContent = "Hide Full Response";
+        }
+      };
+      assistantMetaEl.appendChild(showFullBtn);
+    }
+  } catch (err) {
+    console.error(err);
+    appendError("Network or server error while contacting the proxy.");
+  } finally {
+    sendButtonEl.disabled = false;
+    sendButtonEl.textContent = "Send";
+  }
 }
 
 formEl.addEventListener("submit", (event) => {
@@ -739,4 +994,4 @@ formEl.addEventListener("submit", (event) => {
   sendMessage(value);
 });
 
-appendSystem("You are connected to the ChatGPT proxy. Messages are not persisted server-side.");
+renderConversationFromState();

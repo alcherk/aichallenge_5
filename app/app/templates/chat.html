@@ -75,7 +75,10 @@
                     <h1>ChatGPT Proxy</h1>
                     <p class="subtitle">FastAPI + Docker single-page chat UI</p>
                 </div>
-                <button id="settings-btn" class="settings-btn" title="System Prompt Settings">⚙️</button>
+                <div class="header-actions">
+                    <button id="new-chat-btn" class="new-chat-btn" title="Start a new chat (clears saved history)">New Chat</button>
+                    <button id="settings-btn" class="settings-btn" title="System Prompt Settings">⚙️</button>
+                </div>
             </div>
             <div id="system-prompt-panel" class="system-prompt-panel" style="display: none;">
                 <label for="model-select">Model:</label>
