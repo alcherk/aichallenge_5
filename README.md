@@ -1,177 +1,269 @@
-## ChatGPT Proxy Service (FastAPI + Docker)
+# ChatGPT Proxy Service
 
-A lightweight FastAPI-based proxy in Python that exposes a simple web chat UI and forwards requests to the ChatGPT API. The service is designed to run inside Docker and listen on port **8333**, suitable for deployment to a VPS.
+Modern FastAPI-based proxy service with React + TypeScript frontend. Forwards requests to the ChatGPT API with a feature-rich web interface.
 
-### Features
-- **FastAPI backend** with:
-  - `GET /health` – basic health check.
-  - `GET /` – serves a single-page chat UI.
-  - `POST /api/chat` – JSON API proxy to the ChatGPT `/chat/completions` endpoint.
-- **Single-page web UI** (no auth, no persistence yet):
-  - Clean, modern chat interface.
-  - Client-side-only conversation history.
-- **Dockerized deployment**:
-  - Container listens on port `8333`.
-  - Ready for VPS deployment or use behind a reverse proxy.
+## Features
 
----
+### Backend (FastAPI)
+- ✅ `GET /health` - Health check endpoint
+- ✅ `GET /` - Serves React SPA or legacy UI
+- ✅ `POST /api/chat` - JSON API proxy with structured responses
+- ✅ `POST /api/chat/stream` - Server-Sent Events (SSE) streaming
+- ✅ CORS enabled for development
+- ✅ Multi-stage Docker build
 
-### Configuration
+### Frontend (React + TypeScript)
+- ✅ Real-time chat with SSE streaming
+- ✅ Markdown rendering for assistant messages
+- ✅ JSON detection and syntax highlighting
+- ✅ **Settings Panel:**
+  - Model selection (GPT-4o, GPT-4 Turbo, GPT-4o Mini, GPT-3.5 Turbo)
+  - Temperature control (0.0 - 2.0)
+  - System prompt customization
+  - Conversation compression threshold
+- ✅ **Metrics Panel:**
+  - Token usage tracking (input/output/total)
+  - Cost calculation per request
+  - Context window usage visualization
+  - Session totals and statistics
+  - Response time monitoring
+- ✅ Message history persistence (localStorage)
+- ✅ Auto-scroll and responsive design
+- ✅ "New Chat" functionality
 
-Set the following environment variables when running the container:
+## Quick Start
 
-- **Required**
-  - `OPENAI_API_KEY` – your ChatGPT/OpenAI API key.
+### Development (Dual Server)
 
-- **Optional**
-  - `OPENAI_MODEL` – model name (default: `gpt-4.1-mini`).
-  - `OPENAI_API_BASE` – base URL for the API (default: `https://api.openai.com/v1`).
-  - `REQUEST_TIMEOUT_SECONDS` – request timeout to upstream API (default: `60`).
-  - `APP_HOST` – host to bind inside container (default: `0.0.0.0`).
-  - `APP_PORT` – port to bind inside container (default: `8333`).
+**Terminal 1 - Backend:**
+```bash
+source .venv/bin/activate
+export OPENAI_API_KEY="your-key-here"
+uvicorn app.app.main:app --reload --port 8333
+```
 
----
+**Terminal 2 - Frontend:**
+```bash
+cd frontend
+npm install
+npm run dev
+# Opens at http://localhost:5173
+```
 
-### Project structure (relevant parts)
+### Production (Docker)
 
-- `app/app/main.py` – FastAPI app, routes, UI + API wiring.
-- `app/app/config.py` – configuration via Pydantic `Settings`.
-- `app/app/schemas.py` – Pydantic models for requests/responses.
-- `app/app/services/chatgpt_client.py` – ChatGPT API client using `httpx`.
-- `app/app/templates/chat.html` – main chat page.
-- `app/app/static/styles.css` – styles for the chat UI.
-- `app/app/static/chat.js` – front-end logic for sending/receiving messages.
-- `requirements.txt` – Python dependencies.
-- `Dockerfile` – container image definition.
-- `docker-compose.yml` – optional local/dev runner.
-- `CONTEXT.md` – architectural notes and extension ideas.
+```bash
+# Build image (includes React build)
+docker build -t chatgpt-proxy .
 
----
+# Run container
+docker run -d \
+  --name chatgpt-proxy \
+  -e OPENAI_API_KEY="your-key" \
+  -e OPENAI_MODEL="gpt-4o-mini" \
+  -p 8333:8333 \
+  --restart unless-stopped \
+  chatgpt-proxy
 
-### Running locally without Docker
+# Access at http://localhost:8333
+```
 
-You can run the app directly with Uvicorn if you have Python available.
+### Docker Compose
 
-1. **Install dependencies**
+```bash
+export OPENAI_API_KEY="your-key"
+docker compose up -d --build
+```
 
-   ```bash
-   cd /Users/lex/Projects/ai/AI_Challenge_5/week1_day1
-   python -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+## Configuration
 
-2. **Set environment variables** (at least `OPENAI_API_KEY`):
+### Required
+- `OPENAI_API_KEY` - Your OpenAI API key
 
-   ```bash
-   export OPENAI_API_KEY="your-api-key-here"
-   export OPENAI_MODEL="gpt-4.1-mini"  # optional
-   ```
+### Optional
+- `OPENAI_MODEL` - Default: `gpt-4o-mini`
+- `OPENAI_API_BASE` - Default: `https://api.openai.com/v1`
+- `REQUEST_TIMEOUT_SECONDS` - Default: `60`
+- `APP_HOST` - Default: `0.0.0.0`
+- `APP_PORT` - Default: `8333`
 
-3. **Run the server**
+## Project Structure
 
-   ```bash
-   uvicorn app.app.main:app --host 0.0.0.0 --port 8333
-   ```
+```
+.
+├── app/
+│   └── app/
+│       ├── main.py           # FastAPI application
+│       ├── config.py         # Environment configuration
+│       ├── schemas.py        # Pydantic models
+│       ├── services/
+│       │   └── chatgpt_client.py  # OpenAI API client
+│       ├── static/           # Legacy frontend (fallback)
+│       └── templates/        # Legacy templates
+├── frontend/                 # React + TypeScript SPA
+│   ├── src/
+│   │   ├── components/      # React components
+│   │   ├── store/           # Zustand state management
+│   │   ├── services/        # API and storage services
+│   │   ├── types/           # TypeScript definitions
+│   │   └── utils/           # Utilities
+│   ├── dist/                # Production build (gitignored)
+│   └── package.json
+├── requirements.txt         # Python dependencies
+├── Dockerfile              # Multi-stage build
+├── docker-compose.yml
+├── CLAUDE.md              # Development guide for Claude Code
+├── DEPLOYMENT.md          # Complete deployment guide
+└── WEB_UI_ARCHITECTURE.md # Frontend architecture details
+```
 
-4. **Open the UI**
+## Technology Stack
 
-   Visit `http://localhost:8333/` in your browser.
+### Backend
+- Python 3.11
+- FastAPI
+- Uvicorn
+- httpx (async HTTP client)
+- Pydantic (data validation)
 
----
+### Frontend
+- React 18
+- TypeScript
+- Vite (build tool)
+- Tailwind CSS v4
+- Zustand (state management)
+- React Markdown
+- SSE streaming
 
-### Running with Docker (local)
+## Development
 
-1. **Build the image**
+### Backend Setup
 
-   ```bash
-   cd /Users/lex/Projects/ai/AI_Challenge_5/week1_day1
-   docker build -t chatgpt-proxy .
-   ```
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+export OPENAI_API_KEY="your-key"
+uvicorn app.app.main:app --reload --port 8333
+```
 
-2. **Run the container**
+### Frontend Setup
 
-   ```bash
-   docker run -d \
-     --name chatgpt-proxy \
-     -e OPENAI_API_KEY="your-api-key-here" \
-     -e OPENAI_MODEL="gpt-4.1-mini" \
-     -p 8333:8333 \
-     chatgpt-proxy
-   ```
+```bash
+cd frontend
+npm install
+npm run dev  # Development server
+npm run build  # Production build
+npm run preview  # Preview production build
+```
 
-3. **Access the service**
+## Deployment
 
-   - Browser UI: `http://localhost:8333/`
-   - Health check: `http://localhost:8333/health`
-   - API endpoint: `POST http://localhost:8333/api/chat`
+See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment instructions including:
+- Docker deployment
+- VPS deployment
+- Reverse proxy configuration (nginx)
+- SSL/TLS setup
+- Monitoring and troubleshooting
 
----
+## Architecture
 
-### Running with Docker Compose
+The application uses a dual-frontend architecture:
 
-If you prefer `docker-compose`, a basic file is included.
+**Development:**
+- Backend runs on port 8333
+- Vite dev server on port 5173 (proxies API requests to backend)
+- Hot module replacement for instant feedback
 
-1. **Export your API key** (and optionally model):
+**Production:**
+- Single Docker container
+- Backend serves React build from `frontend/dist/`
+- All requests handled by FastAPI
+- SSE streaming for real-time responses
 
-   ```bash
-   export OPENAI_API_KEY="your-api-key-here"
-   export OPENAI_MODEL="gpt-4.1-mini"  # optional
-   ```
+## API Endpoints
 
-2. **Start the stack**
+### Health Check
+```bash
+GET /health
+Response: {"status": "ok"}
+```
 
-   ```bash
-   cd /Users/lex/Projects/ai/AI_Challenge_5/week1_day1
-   docker compose up -d --build
-   ```
+### Chat (Non-streaming)
+```bash
+POST /api/chat
+Content-Type: application/json
 
-3. **Access as usual** at `http://localhost:8333/`.
+{
+  "messages": [
+    {"role": "user", "content": "Hello"}
+  ],
+  "model": "gpt-4o-mini",
+  "temperature": 0.7
+}
 
----
+Response: StructuredResponse with data, metadata, error fields
+```
 
-### Deploying to a VPS with Docker
+### Chat (Streaming)
+```bash
+POST /api/chat/stream
+Content-Type: application/json
+Accept: text/event-stream
 
-Assuming your VPS already has Docker (and optionally Docker Compose) installed:
+Events:
+- event: chunk - {"delta": "..."}
+- event: done - Complete structured response
+- event: error - Error details
+```
 
-1. **Copy the project to the VPS** (e.g., via `git clone` or `scp`).
-2. **On the VPS**, build the image:
+## Features in Detail
 
-   ```bash
-   cd /path/to/week1_day1
-   docker build -t chatgpt-proxy .
-   ```
+### SSE Streaming
+Real-time token-by-token responses using Server-Sent Events. The frontend displays text as it arrives from the API.
 
-3. **Set your API key** securely on the VPS and run the container:
+### Metrics Tracking
+- Automatic cost calculation based on OpenAI pricing
+- Token usage monitoring
+- Context window usage with visual indicators
+- Session totals persisted in localStorage
 
-   ```bash
-   docker run -d \
-     --name chatgpt-proxy \
-     -e OPENAI_API_KEY="your-api-key-here" \
-     -e OPENAI_MODEL="gpt-4.1-mini" \
-     -p 8333:8333 \
-     --restart unless-stopped \
-     chatgpt-proxy
-   ```
+### Settings Management
+- Multiple model support (GPT-4o, GPT-4 Turbo, GPT-4, GPT-4o Mini, GPT-3.5 Turbo)
+- Temperature control with visual slider
+- Custom system prompts
+- Automatic conversation compression
 
-4. **Verify** the service from the VPS:
+### Data Persistence
+All user data stored in browser localStorage:
+- Conversation history
+- User settings
+- Metrics and statistics
 
-   ```bash
-   curl http://localhost:8333/health
-   ```
+## Documentation
 
-5. **Expose publicly**:
-   - Either open port `8333` in your VPS firewall and hit `http://your-vps-ip:8333/`.
-   - Or put a reverse proxy (nginx/Caddy/Traefik) in front, routing a domain to `127.0.0.1:8333`.
+- [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code
+- [WEB_UI_ARCHITECTURE.md](WEB_UI_ARCHITECTURE.md) - Frontend architecture proposal
+- [DEPLOYMENT.md](DEPLOYMENT.md) - Complete deployment guide
+- [CONTEXT.md](CONTEXT.md) - Architectural notes
+- [frontend/README.md](frontend/README.md) - Frontend-specific documentation
 
----
+## Security
 
-### Future extensions
+- Never commit API keys
+- Use environment variables for sensitive data
+- Enable HTTPS in production
+- Restrict CORS origins in production
+- Input validation via Pydantic schemas
 
-Some ideas already accounted for in the design:
+## Support
 
-- Add server-side conversation history (database-backed) instead of browser-only.
-- Introduce authentication and per-user sessions.
-- Expose additional model parameters (temperature, max_tokens) in the UI.
-- Implement streaming responses using SSE or websockets.
+For issues:
+1. Check logs: `docker logs chatgpt-proxy`
+2. Verify environment variables
+3. Test health endpoint: `curl http://localhost:8333/health`
+4. Review [DEPLOYMENT.md](DEPLOYMENT.md) troubleshooting section
+
+## License
+
+See LICENSE file for details.

@@ -1,8 +1,9 @@
 import httpx
 import time
+from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -25,8 +26,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.mount("/static", StaticFiles(directory="app/app/static"), name="static")
-templates = Jinja2Templates(directory="app/app/templates")
+# Check if frontend build exists
+frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+use_react_frontend = frontend_dist.exists() and frontend_dist.is_dir()
+
+if use_react_frontend:
+    # Serve React frontend in production
+    app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+else:
+    # Serve legacy frontend in development
+    app.mount("/static", StaticFiles(directory="app/app/static"), name="static")
+    templates = Jinja2Templates(directory="app/app/templates")
 
 
 @app.get("/health")
@@ -34,12 +44,21 @@ async def health_check() -> dict:
     return {"status": "ok"}
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request) -> HTMLResponse:
-    # Add cache-busting timestamp to prevent CSS/JS caching
-    import time
-    cache_bust = int(time.time())
-    return templates.TemplateResponse("chat.html", {"request": request, "cache_bust": cache_bust})
+if use_react_frontend:
+    @app.get("/{full_path:path}", response_class=HTMLResponse)
+    async def serve_react_app(full_path: str):
+        """Serve React app for all non-API routes"""
+        # Serve index.html for all routes (React Router handles routing)
+        index_file = frontend_dist / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        return HTMLResponse(content="<h1>Frontend not found</h1>", status_code=404)
+else:
+    @app.get("/", response_class=HTMLResponse)
+    async def index(request: Request) -> HTMLResponse:
+        # Add cache-busting timestamp to prevent CSS/JS caching
+        cache_bust = int(time.time())
+        return templates.TemplateResponse("chat.html", {"request": request, "cache_bust": cache_bust})
 
 
 @app.post("/api/chat/stream")
