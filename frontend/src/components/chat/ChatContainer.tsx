@@ -34,12 +34,14 @@ export const ChatContainer: React.FC = () => {
       try {
         let fullContent = '';
 
+        const requestPayload: any = {
+          messages: conversationMessages,
+          temperature,
+          model,
+        };
+
         await streamChat(
-          {
-            messages: conversationMessages,
-            temperature,
-            model,
-          },
+          requestPayload,
           {
             onChunk: (delta) => {
               fullContent += delta;

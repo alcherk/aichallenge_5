@@ -17,6 +17,9 @@ export interface Settings {
   temperature: number;
   model: ModelName;
   compressionThreshold: number;
+  mcpEnabled: boolean;
+  mcpConfigPath: string;
+  workspaceRoot: string;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `Ты помощник-прокси между пользователем и системой.
@@ -39,6 +42,9 @@ export const DEFAULT_SETTINGS: Settings = {
   temperature: 0.7,
   model: 'gpt-4o-mini',
   compressionThreshold: 10,
+  mcpEnabled: false,
+  mcpConfigPath: '',
+  workspaceRoot: '',
 };
 
 export const MODEL_PRICING: Record<ModelName, ModelPricing> = {

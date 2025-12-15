@@ -1,4 +1,4 @@
-# Web UI Architecture Proposal
+# Web UI Architecture
 
 ## Current State Analysis
 
@@ -33,16 +33,9 @@
 
 ---
 
-## Proposed Modern Architecture
+## Technology Stack
 
-### Option 1: React + TypeScript (Recommended)
-
-**Why React:**
-- Large ecosystem and community
-- Excellent TypeScript support
-- Rich component libraries
-- Easy to find developers
-- Server-side rendering support (if needed later)
+### Frontend Framework: React + TypeScript
 
 **Stack:**
 ```
@@ -122,52 +115,7 @@ frontend/
 
 ---
 
-### Option 2: Vue 3 + TypeScript (Alternative)
-
-**Why Vue:**
-- Easier learning curve than React
-- Excellent TypeScript support
-- Built-in reactivity system
-- Smaller bundle size
-- Better performance for complex UIs
-
-**Stack:**
-```
-Frontend:
-- Vue 3 (Composition API)
-- TypeScript
-- Vite
-- Pinia - state management
-- VueUse - composable utilities
-- TanStack Query (Vue Query) - server state
-- Tailwind CSS
-- HeadlessUI - accessible components
-```
-
----
-
-### Option 3: Svelte + TypeScript (Lightweight)
-
-**Why Svelte:**
-- Smallest bundle size (compiles to vanilla JS)
-- Simplest syntax
-- Built-in reactivity and stores
-- Excellent performance
-- Less boilerplate than React/Vue
-
-**Stack:**
-```
-Frontend:
-- SvelteKit or Vite + Svelte
-- TypeScript
-- Svelte stores - state management
-- Tailwind CSS
-- Svelte Motion - animations
-```
-
----
-
-## Recommended Architecture: React + TypeScript
+## Architecture Design
 
 ### Key Architecture Patterns
 
@@ -455,34 +403,34 @@ app.include_router(api_router)
 
 ## Migration Plan
 
-### Phase 1: Setup Modern Tooling (Week 1)
+### Phase 1: Setup Modern Tooling
 1. Initialize Vite + React + TypeScript project in `frontend/` directory
 2. Configure Tailwind CSS
 3. Set up TypeScript types matching backend schemas
 4. Create basic component structure
 5. Set up state management (Zustand)
 
-### Phase 2: Core Chat Features (Week 2)
+### Phase 2: Core Chat Features
 1. Implement ChatContainer, MessageList, ChatInput components
 2. Migrate message rendering (markdown, JSON formatting)
 3. Implement SSE streaming with proper types
 4. Add localStorage persistence
 5. Connect to existing `/api/chat` and `/api/chat/stream` endpoints
 
-### Phase 3: Settings & Metrics (Week 3)
+### Phase 3: Settings & Metrics
 1. Build SettingsPanel with model selector, temperature, system prompt
 2. Implement MetricsPanel with token tracking and cost calculation
 3. Add context window visualization
 4. Migrate total metrics tracking
 
-### Phase 4: Advanced Features (Week 4)
+### Phase 4: Advanced Features
 1. Implement conversation compression UI
 2. Add message export functionality
 3. Implement dark mode toggle
 4. Add keyboard shortcuts (Ctrl+Enter to send, etc.)
 5. Optimize performance (memoization, virtualization for long chats)
 
-### Phase 5: Testing & Polish (Week 5)
+### Phase 5: Testing & Polish
 1. Write unit tests for utilities (pricing, markdown, JSON parsing)
 2. Write integration tests for components
 3. Add error boundaries
@@ -490,7 +438,7 @@ app.include_router(api_router)
 5. Accessibility improvements (ARIA labels, keyboard navigation)
 6. Bundle optimization
 
-### Phase 6: Deployment (Week 6)
+### Phase 6: Deployment
 1. Build production bundle
 2. Update Dockerfile to build frontend during image build
 3. Configure FastAPI to serve built frontend
@@ -585,7 +533,7 @@ CMD ["uvicorn", "app.app.main:app", "--host", "0.0.0.0", "--port", "8333"]
 
 ---
 
-## Benefits of New Architecture
+## Architecture Benefits
 
 ### Developer Experience
 - **TypeScript**: Catch errors at compile time, better IDE autocomplete
@@ -641,23 +589,23 @@ describe('ChatMessage', () => {
 
 ---
 
-## Conclusion
+## Summary
 
-Migrating to a modern React + TypeScript architecture will:
-1. Dramatically improve code maintainability
-2. Enable faster feature development
-3. Provide better type safety and fewer runtime errors
-4. Create a foundation for scaling to multiple developers
-5. Improve performance through optimization techniques
+This React + TypeScript architecture provides:
+1. Dramatically improved code maintainability
+2. Faster feature development
+3. Better type safety and fewer runtime errors
+4. Foundation for scaling to multiple developers
+5. Improved performance through optimization techniques
 
-The phased migration approach allows you to:
-- Keep the current UI working during development
-- Test new features incrementally
-- Switch to the new UI when ready
-- Minimize deployment risks
+The phased migration approach:
+- Keeps the current UI working during development
+- Tests new features incrementally
+- Allows switching to the new UI when ready
+- Minimizes deployment risks
 
-**Recommended Next Steps:**
-1. Review and approve architecture proposal
-2. Set up frontend project structure
-3. Begin Phase 1 implementation
-4. Establish development workflow
+**Implementation Approach:**
+1. Set up frontend project structure
+2. Implement features phase by phase
+3. Maintain backward compatibility during migration
+4. Switch to new UI after thorough testing

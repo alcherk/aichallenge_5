@@ -11,6 +11,9 @@ interface SettingsState extends Settings {
   setTemperature: (temperature: number) => void;
   setModel: (model: ModelName) => void;
   setCompressionThreshold: (threshold: number) => void;
+  setMcpEnabled: (enabled: boolean) => void;
+  setMcpConfigPath: (path: string) => void;
+  setWorkspaceRoot: (path: string) => void;
   resetToDefaults: () => void;
   loadFromStorage: () => void;
 }
@@ -36,6 +39,21 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setCompressionThreshold: (compressionThreshold) => {
     set({ compressionThreshold });
     settingsStorage.setCompressionThreshold(compressionThreshold);
+  },
+
+  setMcpEnabled: (mcpEnabled) => {
+    set({ mcpEnabled });
+    settingsStorage.setMcpEnabled(mcpEnabled);
+  },
+
+  setMcpConfigPath: (mcpConfigPath) => {
+    set({ mcpConfigPath });
+    settingsStorage.setMcpConfigPath(mcpConfigPath);
+  },
+
+  setWorkspaceRoot: (workspaceRoot) => {
+    set({ workspaceRoot });
+    settingsStorage.setWorkspaceRoot(workspaceRoot);
   },
 
   resetToDefaults: () => {

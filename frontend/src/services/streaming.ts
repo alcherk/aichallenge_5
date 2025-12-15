@@ -56,13 +56,20 @@ export async function streamChat(
   request: ChatRequest,
   callbacks: StreamCallbacks
 ): Promise<void> {
+  // Defensive: strip MCP-related fields from the outbound payload.
+  // (The backend supports MCP overrides, but the UI should not send them for chat requests.)
+  const sanitizedRequest: Record<string, unknown> = { ...(request as unknown as Record<string, unknown>) };
+  delete sanitizedRequest.mcp_enabled;
+  delete sanitizedRequest.mcp_config_path;
+  delete sanitizedRequest.workspace_root;
+
   const response = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
     },
-    body: JSON.stringify(request),
+    body: JSON.stringify(sanitizedRequest),
   });
 
   if (!response.ok || !response.body) {

@@ -15,6 +15,10 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
+    # Optional per-request MCP overrides (backward-compatible).
+    mcp_enabled: Optional[bool] = None
+    mcp_config_path: Optional[str] = None
+    workspace_root: Optional[str] = None
 
 
 class ChatChoice(BaseModel):

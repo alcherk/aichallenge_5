@@ -17,10 +17,16 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     temperature,
     model,
     compressionThreshold,
+    mcpEnabled,
+    mcpConfigPath,
+    workspaceRoot,
     setSystemPrompt,
     setTemperature,
     setModel,
     setCompressionThreshold,
+    setMcpEnabled,
+    setMcpConfigPath,
+    setWorkspaceRoot,
     resetToDefaults,
   } = useSettingsStore();
 
@@ -31,6 +37,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
   const [localTemperature, setLocalTemperature] = useState(temperature);
   const [localModel, setLocalModel] = useState(model);
   const [localCompressionThreshold, setLocalCompressionThreshold] = useState(compressionThreshold);
+  const [localMcpEnabled, setLocalMcpEnabled] = useState(mcpEnabled);
+  const [localMcpConfigPath, setLocalMcpConfigPath] = useState(mcpConfigPath);
+  const [localWorkspaceRoot, setLocalWorkspaceRoot] = useState(workspaceRoot);
 
   // Sync local state when settings change
   useEffect(() => {
@@ -38,13 +47,19 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     setLocalTemperature(temperature);
     setLocalModel(model);
     setLocalCompressionThreshold(compressionThreshold);
-  }, [systemPrompt, temperature, model, compressionThreshold]);
+    setLocalMcpEnabled(mcpEnabled);
+    setLocalMcpConfigPath(mcpConfigPath);
+    setLocalWorkspaceRoot(workspaceRoot);
+  }, [systemPrompt, temperature, model, compressionThreshold, mcpEnabled, mcpConfigPath, workspaceRoot]);
 
   const handleSave = () => {
     setSystemPrompt(localSystemPrompt);
     setTemperature(localTemperature);
     setModel(localModel);
     setCompressionThreshold(localCompressionThreshold);
+    setMcpEnabled(localMcpEnabled);
+    setMcpConfigPath(localMcpConfigPath);
+    setWorkspaceRoot(localWorkspaceRoot);
 
     // Update system message in current conversation
     const updatedMessages = [...messages];
@@ -65,6 +80,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
       setLocalTemperature(DEFAULT_SETTINGS.temperature);
       setLocalModel(DEFAULT_SETTINGS.model);
       setLocalCompressionThreshold(DEFAULT_SETTINGS.compressionThreshold);
+      setLocalMcpEnabled(DEFAULT_SETTINGS.mcpEnabled);
+      setLocalMcpConfigPath(DEFAULT_SETTINGS.mcpConfigPath);
+      setLocalWorkspaceRoot(DEFAULT_SETTINGS.workspaceRoot);
       resetToDefaults();
     }
   };
@@ -146,6 +164,67 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
             <p className="text-xs text-slate-400 mt-1">
               Automatically compress conversation history after this many messages
             </p>
+          </div>
+
+          {/* MCP Settings */}
+          <div className="border-t border-slate-700 pt-6">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-semibold text-slate-300">
+                MCP (Tools)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={localMcpEnabled}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setLocalMcpEnabled(next);
+                    // Apply immediately so chat requests reflect the toggle even if user closes without Save.
+                    setMcpEnabled(next);
+                  }}
+                  className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500"
+                />
+                Enable
+              </label>
+            </div>
+
+            <p className="text-xs text-slate-400 mb-3">
+              When enabled, the backend will connect to configured MCP servers and expose their tools to the assistant.
+            </p>
+
+            {localMcpEnabled && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">
+                    MCP config path (server file path)
+                  </label>
+                  <input
+                    type="text"
+                    value={localMcpConfigPath}
+                    onChange={(e) => setLocalMcpConfigPath(e.target.value)}
+                    placeholder="/absolute/path/to/mcp_servers.json"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1">
+                    Workspace root (filesystem tools are restricted to this)
+                  </label>
+                  <input
+                    type="text"
+                    value={localWorkspaceRoot}
+                    onChange={(e) => setLocalWorkspaceRoot(e.target.value)}
+                    placeholder="/absolute/path/to/workspace"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <p className="text-xs text-slate-500">
+                  Tip: start from <span className="font-mono">mcp_servers.example.json</span>.
+                </p>
+              </div>
+            )}
           </div>
         </div>
 

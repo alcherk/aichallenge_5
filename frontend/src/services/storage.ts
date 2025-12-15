@@ -10,6 +10,9 @@ const KEYS = {
   TEMPERATURE: 'temperature',
   MODEL: 'model',
   COMPRESSION_THRESHOLD: 'compressionThreshold',
+  MCP_ENABLED: 'mcpEnabled',
+  MCP_CONFIG_PATH: 'mcpConfigPath',
+  WORKSPACE_ROOT: 'workspaceRoot',
   TOTAL_METRICS: 'totalMetrics',
 } as const;
 
@@ -74,6 +77,9 @@ export const settingsStorage = {
         KEYS.COMPRESSION_THRESHOLD,
         DEFAULT_SETTINGS.compressionThreshold
       ),
+      mcpEnabled: safeGet<boolean>(KEYS.MCP_ENABLED, DEFAULT_SETTINGS.mcpEnabled),
+      mcpConfigPath: safeGet<string>(KEYS.MCP_CONFIG_PATH, DEFAULT_SETTINGS.mcpConfigPath),
+      workspaceRoot: safeGet<string>(KEYS.WORKSPACE_ROOT, DEFAULT_SETTINGS.workspaceRoot),
     };
   },
 
@@ -82,6 +88,9 @@ export const settingsStorage = {
     safeSet(KEYS.TEMPERATURE, settings.temperature);
     safeSet(KEYS.MODEL, settings.model);
     safeSet(KEYS.COMPRESSION_THRESHOLD, settings.compressionThreshold);
+    safeSet(KEYS.MCP_ENABLED, settings.mcpEnabled);
+    safeSet(KEYS.MCP_CONFIG_PATH, settings.mcpConfigPath);
+    safeSet(KEYS.WORKSPACE_ROOT, settings.workspaceRoot);
   },
 
   setSystemPrompt(prompt: string): void {
@@ -98,6 +107,18 @@ export const settingsStorage = {
 
   setCompressionThreshold(threshold: number): void {
     safeSet(KEYS.COMPRESSION_THRESHOLD, threshold);
+  },
+
+  setMcpEnabled(enabled: boolean): void {
+    safeSet(KEYS.MCP_ENABLED, enabled);
+  },
+
+  setMcpConfigPath(path: string): void {
+    safeSet(KEYS.MCP_CONFIG_PATH, path);
+  },
+
+  setWorkspaceRoot(path: string): void {
+    safeSet(KEYS.WORKSPACE_ROOT, path);
   },
 };
 

@@ -86,6 +86,39 @@ docker compose up -d --build
 - `REQUEST_TIMEOUT_SECONDS` - Default: `60`
 - `APP_HOST` - Default: `0.0.0.0`
 - `APP_PORT` - Default: `8333`
+- `MCP_CONFIG_PATH` - Path to MCP server config JSON (optional; disabled by default)
+- `WORKSPACE_ROOT` - Workspace root for filesystem-like MCP tools (default: repo root)
+
+## MCP (Model Context Protocol) Tools (Optional)
+
+This project can optionally expose **external MCP servers** as tool calls to the assistant at runtime (OpenAI tool-calling).
+
+- MCP is **disabled by default**
+- When enabled, the backend connects to configured MCP servers at startup, fetches their available tools, and makes them callable by the model
+- Filesystem-like tools are restricted to `WORKSPACE_ROOT` (no auth layer is added)
+
+### Enable MCP
+
+1) Create a config file (start from [`mcp_servers.example.json`](mcp_servers.example.json)).
+
+2) Set env vars:
+
+```bash
+export MCP_CONFIG_PATH="/absolute/path/to/mcp_servers.json"
+export WORKSPACE_ROOT="/absolute/path/to/your/workspace"
+```
+
+3) Start the backend as usual.
+
+### Configure MCP servers
+
+The config file is JSON with a `servers` array. Each server supports:
+
+- `name`: display name
+- `transport`: `"stdio"` or `"http"`
+- `command`: for stdio servers (array of strings)
+- `url`: for HTTP servers
+- `kind`: `"filesystem"` or `"fetch"` (enables extra validation/safety; optional)
 
 ## Project Structure
 

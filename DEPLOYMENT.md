@@ -184,6 +184,8 @@ sudo certbot --nginx -d your-domain.com
 - `REQUEST_TIMEOUT_SECONDS` - Default: `60`
 - `APP_HOST` - Default: `0.0.0.0`
 - `APP_PORT` - Default: `8333`
+- `MCP_CONFIG_PATH` - Path to MCP server config JSON (optional; disabled by default)
+- `WORKSPACE_ROOT` - Workspace root for filesystem-like MCP tools (default: repo root)
 
 ## Frontend Features
 

@@ -1,6 +1,8 @@
 import httpx
 import time
 from pathlib import Path
+from typing import Optional
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
@@ -13,9 +15,14 @@ import json
 from .config import get_settings
 from .schemas import ChatRequest, ChatResponse, StructuredResponse
 from .services.chatgpt_client import call_chatgpt, stream_chatgpt
+from .mcp.manager import init_mcp_manager
+from .mcp.manager import ensure_mcp_manager, get_mcp_manager
 
 
 settings = get_settings()
+_level = getattr(logging, str(getattr(settings, "log_level", "INFO")).upper(), logging.INFO)
+logging.basicConfig(level=_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("app")
 app = FastAPI(title="ChatGPT Proxy Service")
 
 app.add_middleware(
@@ -39,9 +46,64 @@ else:
     templates = Jinja2Templates(directory="app/app/templates")
 
 
+@app.on_event("startup")
+async def startup() -> None:
+    """
+    Optional MCP initialization.
+
+    When MCP is disabled (default), this is a no-op.
+    """
+    try:
+        mgr = init_mcp_manager(
+            mcp_config_path=settings.mcp_config_path or None,
+            workspace_root=Path(settings.workspace_root),
+        )
+        if mgr is not None:
+            await mgr.connect()
+            logger.info("[MCP] connected")
+    except Exception as e:
+        # Non-fatal: app should still function as a plain OpenAI proxy.
+        logger.warning("[MCP] disabled due to startup error: %s", e)
+
+
 @app.get("/health")
 async def health_check() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/mcp/status")
+async def mcp_status(
+    enabled: Optional[bool] = None,
+    mcp_config_path: Optional[str] = None,
+    workspace_root: Optional[str] = None,
+) -> dict:
+    """
+    Return MCP status + discovered tools for the UI.
+
+    If MCP isn't initialized yet, optional query params can trigger initialization.
+    """
+    try:
+        if get_mcp_manager() is None:
+            mcp_enabled = bool(enabled) if enabled is not None else bool(
+                mcp_config_path or settings.mcp_config_path
+            )
+            await ensure_mcp_manager(
+                mcp_config_path=(
+                    (mcp_config_path or settings.mcp_config_path or None) if mcp_enabled else None
+                ),
+                workspace_root=Path(workspace_root or settings.workspace_root),
+            )
+        mgr = get_mcp_manager()
+        if mgr is None:
+            return {"enabled": False, "servers": [], "tools": []}
+        return mgr.status()
+    except Exception as e:
+        return {
+            "enabled": False,
+            "servers": [],
+            "tools": [],
+            "error": {"type": type(e).__name__, "detail": str(e)},
+        }
 
 
 if use_react_frontend:
@@ -72,19 +134,73 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
     """
     start_time = time.time()
     request_id = getattr(http_request.state, "request_id", None)
+    logger.debug(
+        "stream request received request_id=%s model=%s messages=%d",
+        request_id,
+        request.model or settings.openai_model,
+        len(request.messages or []),
+    )
 
     def sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+    def _extract_upstream_error(response: httpx.Response) -> dict:
+        """
+        Extract as much upstream error detail as possible for copy/paste debugging.
+        This intentionally avoids including request headers (which may include secrets).
+        """
+        raw_text: str = ""
+        try:
+            raw_text = (response.text or "").strip()
+        except Exception:
+            raw_text = ""
+
+        raw_json = None
+        try:
+            raw_json = response.json()
+        except Exception:
+            raw_json = None
+
+        # Prefer the standard OpenAI error message if present, else fall back to raw text.
+        error_message = None
+        if isinstance(raw_json, dict):
+            err = raw_json.get("error")
+            if isinstance(err, dict):
+                error_message = err.get("message") or error_message
+        error_message = error_message or raw_text or f"Upstream returned HTTP {response.status_code}"
+
+        # Include a small, safe subset of headers (useful for proxies/CDNs).
+        safe_headers = {}
+        for k in ("content-type", "x-request-id", "cf-ray", "x-amzn-requestid"):
+            v = response.headers.get(k)
+            if v:
+                safe_headers[k] = v
+
+        return {
+            "status_code": response.status_code,
+            "message": error_message,
+            "headers": safe_headers,
+            "body_json": raw_json,
+            "body_text": raw_text,
+        }
+
     async def event_generator():
         assistant_text_parts: list[str] = []
-        upstream_id: str | None = None
-        upstream_model: str | None = request.model or settings.openai_model
-        upstream_finish_reason: str | None = None
-        token_usage: dict | None = None
+        upstream_id: Optional[str] = None
+        upstream_model: Optional[str] = request.model or settings.openai_model
+        upstream_finish_reason: Optional[str] = None
+        token_usage: Optional[dict] = None
+        chunk_count = 0
 
         try:
+            logger.debug(
+                "stream upstream begin request_id=%s api_base=%s model=%s",
+                request_id,
+                settings.openai_api_base,
+                upstream_model,
+            )
             async for chunk in stream_chatgpt(request):
+                chunk_count += 1
                 upstream_id = upstream_id or chunk.get("id")
                 upstream_model = chunk.get("model") or upstream_model
 
@@ -96,6 +212,13 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                     if delta:
                         assistant_text_parts.append(delta)
                         yield sse("chunk", {"delta": delta})
+                        if chunk_count == 1 or chunk_count % 25 == 0:
+                            logger.debug(
+                                "stream chunk request_id=%s chunk_count=%d delta_len=%d",
+                                request_id,
+                                chunk_count,
+                                len(delta),
+                            )
 
                 usage = chunk.get("usage")
                 if usage:
@@ -130,15 +253,24 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 },
             }
             yield sse("done", structured)
+            logger.info(
+                "stream done request_id=%s model=%s chunks=%d time_ms=%.2f",
+                request_id,
+                upstream_model,
+                chunk_count,
+                (time.time() - start_time) * 1000.0,
+            )
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code
-            error_detail = f"ChatGPT API returned status {status_code}"
-            try:
-                error_data = e.response.json()
-                if "error" in error_data and "message" in error_data["error"]:
-                    error_detail = error_data["error"]["message"]
-            except Exception:
-                pass
+            upstream = _extract_upstream_error(e.response)
+            error_detail = upstream.get("message") or f"ChatGPT API returned status {status_code}"
+            logger.error(
+                "stream upstream error request_id=%s status=%s message=%s upstream=%s",
+                request_id,
+                status_code,
+                error_detail,
+                upstream,
+            )
 
             yield sse(
                 "error",
@@ -151,6 +283,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                         "type": "HTTPStatusError",
                         "detail": error_detail,
                         "status_code": status_code,
+                        "upstream": upstream,
                     },
                     "metadata": {
                         "timestamp": time.time(),
@@ -160,6 +293,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 },
             )
         except RuntimeError as e:
+            logger.error("stream runtime error request_id=%s error=%s", request_id, e)
             yield sse(
                 "error",
                 {
@@ -176,6 +310,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 },
             )
         except Exception as e:
+            logger.exception("stream unexpected error request_id=%s", request_id)
             yield sse(
                 "error",
                 {
@@ -232,6 +367,12 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
     """
     start_time = time.time()
     request_id = getattr(http_request.state, "request_id", None)
+    logger.debug(
+        "chat request received request_id=%s model=%s messages=%d",
+        request_id,
+        request.model or settings.openai_model,
+        len(request.messages or []),
+    )
     
     try:
         chat_response = await call_chatgpt(request)
@@ -263,14 +404,45 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
         )
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code
-        # Try to extract detailed error message
-        error_detail = f"ChatGPT API returned status {status_code}"
+        upstream = {
+            "status_code": status_code,
+            "headers": {},
+            "body_json": None,
+            "body_text": "",
+        }
+        # Reuse the stream helper logic here (kept inline to avoid extra imports).
         try:
-            error_data = e.response.json()
-            if "error" in error_data and "message" in error_data["error"]:
-                error_detail = error_data["error"]["message"]
+            raw_text = (e.response.text or "").strip()
         except Exception:
-            pass
+            raw_text = ""
+        try:
+            raw_json = e.response.json()
+        except Exception:
+            raw_json = None
+        safe_headers = {}
+        for k in ("content-type", "x-request-id", "cf-ray", "x-amzn-requestid"):
+            v = e.response.headers.get(k)
+            if v:
+                safe_headers[k] = v
+        upstream = {
+            "status_code": status_code,
+            "headers": safe_headers,
+            "body_json": raw_json,
+            "body_text": raw_text,
+        }
+        error_detail = None
+        if isinstance(raw_json, dict):
+            err = raw_json.get("error")
+            if isinstance(err, dict):
+                error_detail = err.get("message") or error_detail
+        error_detail = error_detail or raw_text or f"ChatGPT API returned status {status_code}"
+        logger.error(
+            "chat upstream error request_id=%s status=%s message=%s upstream=%s",
+            request_id,
+            status_code,
+            error_detail,
+            upstream,
+        )
         
         return StructuredResponse(
             success=False,
@@ -281,6 +453,7 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
                 "type": "HTTPStatusError",
                 "detail": error_detail,
                 "status_code": status_code,
+                "upstream": upstream,
             },
             metadata={
                 "timestamp": time.time(),
@@ -289,6 +462,7 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
             },
         )
     except RuntimeError as e:
+        logger.error("chat runtime error request_id=%s error=%s", request_id, e)
         return StructuredResponse(
             success=False,
             status_code=500,
@@ -305,6 +479,7 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
             },
         )
     except Exception as e:
+        logger.exception("chat unexpected error request_id=%s", request_id)
         return StructuredResponse(
             success=False,
             status_code=500,
