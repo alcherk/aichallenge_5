@@ -7,10 +7,21 @@
       "command": ["<your-filesystem-mcp-server-cmd>", "--root", "/absolute/path/to/workspace"]
     },
     {
-      "name": "fetch",
+      "name": "fetch_jsonrpc",
       "transport": "http",
       "kind": "fetch",
       "url": "http://127.0.0.1:9001"
+    },
+    {
+      "name": "weather_mcp_tools",
+      "transport": "http",
+      "kind": "generic",
+      "http_mode": "mcp_tools",
+      "url": "http://69.62.64.218:5151",
+      "timeout_seconds": 30,
+      "max_retries": 3,
+      "backoff_initial_seconds": 0.5,
+      "backoff_max_seconds": 5
     }
   ]
 }

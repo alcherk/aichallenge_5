@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import logging
+import os
 
 import httpx
 
@@ -12,6 +13,21 @@ from ..schemas import ChatRequest, ChatResponse
 from ..mcp.manager import ensure_mcp_manager
 
 logger = logging.getLogger("app.openai")
+
+
+def _truthy_env(name: str) -> bool:
+    v = (os.getenv(name, "") or "").strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
+
+
+def _json_preview(value: Any, *, limit: int = 8000) -> tuple[str, bool]:
+    try:
+        s = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        s = str(value)
+    if len(s) > limit:
+        return (s[:limit] + "…", True)
+    return (s, False)
 
 def _tools_to_responses_api(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
@@ -238,6 +254,20 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
                 body.get("max_tokens"),
                 previous_response_id,
             )
+            if _truthy_env("HTTP_LOG_POST_PAYLOADS"):
+                preview, truncated = _json_preview(body)
+                logger.info(
+                    json.dumps(
+                        {
+                            "event": "http_post_payload",
+                            "target": "openai",
+                            "url": url,
+                            "truncated": truncated,
+                            "payload": preview,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
             response = await client.post(
                 url, json=body, headers=headers
             )

@@ -1,19 +1,20 @@
-import React, { useState, useCallback } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useMetricsStore } from '@/store/metricsStore';
-import { streamChat } from '@/services/streaming';
+import { chatAPI } from '@/services/api';
 import type { Message, StructuredResponse } from '@/types';
 import { MessageList } from './MessageList';
 import { ChatInput } from './ChatInput';
 
 export const ChatContainer: React.FC = () => {
   const { messages, addMessage, setIsStreaming, isStreaming } = useChatStore();
-  const { systemPrompt, temperature, model } = useSettingsStore();
+  const { systemPrompt, temperature, model, mcpConfigPath, workspaceRoot } = useSettingsStore();
   const { updateMetrics } = useMetricsStore();
 
+  const [messageResponses] = React.useState(new Map<number, StructuredResponse>());
   const [streamingContent, setStreamingContent] = useState('');
-  const [messageResponses] = useState(new Map<number, StructuredResponse>());
+  const streamTimerRef = useRef<number | null>(null);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
@@ -30,51 +31,58 @@ export const ChatContainer: React.FC = () => {
 
       setIsStreaming(true);
       setStreamingContent('');
+      if (streamTimerRef.current) {
+        window.clearInterval(streamTimerRef.current);
+        streamTimerRef.current = null;
+      }
 
       try {
-        let fullContent = '';
+        // Always include MCP tools for chat requests.
+        // Use non-streaming /api/chat because streaming mode does not support server-side tool calls.
+        const fallbackConfigPath = '/Users/lex/Projects/ai/AI_Challenge_5/week1_day1/mcp_servers.json';
+        const effectiveConfigPath = (mcpConfigPath && mcpConfigPath.trim()) || fallbackConfigPath;
 
-        const requestPayload: any = {
+        const data = await chatAPI.sendMessage({
           messages: conversationMessages,
           temperature,
           model,
-        };
+          mcp_enabled: true,
+          mcp_config_path: effectiveConfigPath || null,
+          workspace_root: (workspaceRoot && workspaceRoot.trim()) || null,
+        });
 
-        await streamChat(
-          requestPayload,
-          {
-            onChunk: (delta) => {
-              fullContent += delta;
-              setStreamingContent(fullContent);
-            },
-            onDone: (data) => {
-              if (data.success && fullContent) {
-                // Add assistant message to conversation
-                const assistantMessage: Message = {
-                  role: 'assistant',
-                  content: fullContent,
-                };
-                addMessage(assistantMessage);
+        const assistantText = data?.data?.choices?.[0]?.message?.content || '';
+        if (data.success && assistantText) {
+          updateMetrics(data);
 
-                // Update metrics
-                updateMetrics(data);
+          const messageIndex = messages.length + 1; // +1 for the new assistant message
+          messageResponses.set(messageIndex, data);
 
-                // Store response for "Show Full Response" button
-                const messageIndex = messages.length + 1; // +1 for the new assistant message
-                messageResponses.set(messageIndex, data);
+          // Simulated streaming: progressively reveal the final text so it doesn't pop in one-shot.
+          let i = 0;
+          const chunkSize = 24; // chars per tick
+          const intervalMs = 25;
+          streamTimerRef.current = window.setInterval(() => {
+            i = Math.min(assistantText.length, i + chunkSize);
+            setStreamingContent(assistantText.slice(0, i));
+            if (i >= assistantText.length) {
+              if (streamTimerRef.current) {
+                window.clearInterval(streamTimerRef.current);
+                streamTimerRef.current = null;
               }
-            },
-            onError: (error) => {
-              console.error('Streaming error:', error);
-              // You could add an error message to the chat here
-              const errorMessage: Message = {
-                role: 'assistant',
-                content: `Error: ${error.message || 'An error occurred during streaming'}`,
-              };
-              addMessage(errorMessage);
-            },
-          }
-        );
+              addMessage({ role: 'assistant', content: assistantText });
+              setStreamingContent('');
+              setIsStreaming(false);
+            }
+          }, intervalMs);
+          return;
+        } else {
+          const errorMessage: Message = {
+            role: 'assistant',
+            content: `Error: ${data?.error?.detail || 'Request failed'}`,
+          };
+          addMessage(errorMessage);
+        }
       } catch (error) {
         console.error('Failed to send message:', error);
         const errorMessage: Message = {
@@ -83,8 +91,11 @@ export const ChatContainer: React.FC = () => {
         };
         addMessage(errorMessage);
       } finally {
-        setIsStreaming(false);
-        setStreamingContent('');
+        // If we started simulated streaming, we return early above and will stop streaming there.
+        if (!streamTimerRef.current) {
+          setIsStreaming(false);
+          setStreamingContent('');
+        }
       }
     },
     [
@@ -92,6 +103,8 @@ export const ChatContainer: React.FC = () => {
       systemPrompt,
       temperature,
       model,
+      mcpConfigPath,
+      workspaceRoot,
       addMessage,
       setIsStreaming,
       updateMetrics,

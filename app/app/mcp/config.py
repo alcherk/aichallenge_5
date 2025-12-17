@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 
 TransportType = Literal["stdio", "http"]
 ServerKind = Literal["filesystem", "fetch", "generic"]
+HTTPMode = Literal["jsonrpc", "mcp_tools"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,12 @@ class MCPServerConfig:
     command: Optional[list[str]] = None
     url: Optional[str] = None
     kind: ServerKind = "generic"
+    # Only used when transport == "http"
+    http_mode: HTTPMode = "jsonrpc"
+    timeout_seconds: float = 30.0
+    max_retries: int = 3
+    backoff_initial_seconds: float = 0.5
+    backoff_max_seconds: float = 5.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +82,43 @@ def load_mcp_config(path: Optional[str]) -> Optional[MCPConfig]:
             if not isinstance(url, str) or not url.strip():
                 raise RuntimeError(f"MCP servers[{idx}] transport=http requires 'url'")
 
+        http_mode = s.get("http_mode", "jsonrpc")
+        if http_mode not in ("jsonrpc", "mcp_tools"):
+            raise RuntimeError(
+                f"MCP servers[{idx}] invalid 'http_mode' (expected 'jsonrpc' or 'mcp_tools')"
+            )
+
+        def _num(name: str, default: float) -> float:
+            v = s.get(name, default)
+            if isinstance(v, bool):
+                raise RuntimeError(f"MCP servers[{idx}] invalid '{name}' (number expected)")
+            if isinstance(v, (int, float)):
+                return float(v)
+            raise RuntimeError(f"MCP servers[{idx}] invalid '{name}' (number expected)")
+
+        def _int(name: str, default: int) -> int:
+            v = s.get(name, default)
+            if isinstance(v, bool):
+                raise RuntimeError(f"MCP servers[{idx}] invalid '{name}' (int expected)")
+            if isinstance(v, int):
+                return int(v)
+            raise RuntimeError(f"MCP servers[{idx}] invalid '{name}' (int expected)")
+
+        timeout_seconds = _num("timeout_seconds", 30.0)
+        if timeout_seconds <= 0:
+            raise RuntimeError(f"MCP servers[{idx}] invalid 'timeout_seconds' (must be > 0)")
+        max_retries = _int("max_retries", 3)
+        if max_retries < 0:
+            raise RuntimeError(f"MCP servers[{idx}] invalid 'max_retries' (must be >= 0)")
+        backoff_initial_seconds = _num("backoff_initial_seconds", 0.5)
+        if backoff_initial_seconds < 0:
+            raise RuntimeError(
+                f"MCP servers[{idx}] invalid 'backoff_initial_seconds' (must be >= 0)"
+            )
+        backoff_max_seconds = _num("backoff_max_seconds", 5.0)
+        if backoff_max_seconds < 0:
+            raise RuntimeError(f"MCP servers[{idx}] invalid 'backoff_max_seconds' (must be >= 0)")
+
         servers.append(
             MCPServerConfig(
                 name=name,
@@ -82,6 +126,11 @@ def load_mcp_config(path: Optional[str]) -> Optional[MCPConfig]:
                 command=command,
                 url=url,
                 kind=kind,  # type: ignore[arg-type]
+                http_mode=http_mode,  # type: ignore[arg-type]
+                timeout_seconds=timeout_seconds,
+                max_retries=max_retries,
+                backoff_initial_seconds=backoff_initial_seconds,
+                backoff_max_seconds=backoff_max_seconds,
             )
         )
 

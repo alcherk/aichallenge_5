@@ -7,12 +7,22 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import os
 
 from .client import MCPClientSession
 from .config import MCPConfig, MCPServerConfig, load_mcp_config, to_jsonable
+from .http_tools_session import MCPHttpToolsSession
 from .safety import guard_fetch_tool_result, guard_filesystem_tool_args
 from .transports.http import HTTPTransport
 from .transports.stdio import StdioTransport
+
+import logging
+
+logger = logging.getLogger("app.mcp")
+
+def _truthy_env(name: str) -> bool:
+    v = (os.getenv(name, "") or "").strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
 
 
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_]+")
@@ -85,7 +95,8 @@ class MCPManager:
         self._workspace_root = workspace_root
         self._config_source = config_source
 
-        self._sessions: dict[str, MCPClientSession] = {}
+        # NOTE: sessions can be JSON-RPC MCP (`MCPClientSession`) or MCP-over-HTTP-tools (`MCPHttpToolsSession`)
+        self._sessions: dict[str, Any] = {}
         self._tools_openai: list[dict] = []
         self._tool_bindings: dict[str, _ToolBinding] = {}
 
@@ -120,7 +131,7 @@ class MCPManager:
     def matches(self, *, config_source: str, workspace_root: Path) -> bool:
         return self._config_source == config_source and self._workspace_root.resolve() == workspace_root.resolve()
 
-    async def _connect_server(self, server: MCPServerConfig) -> MCPClientSession:
+    async def _connect_server(self, server: MCPServerConfig) -> Any:
         if server.transport == "stdio":
             assert server.command is not None
             t = StdioTransport(server.command)
@@ -128,7 +139,16 @@ class MCPManager:
             return MCPClientSession(t, server_name=server.name)
         else:
             assert server.url is not None
-            t = HTTPTransport(server.url)
+            if getattr(server, "http_mode", "jsonrpc") == "mcp_tools":
+                return MCPHttpToolsSession(
+                    server.url,
+                    server_name=server.name,
+                    timeout_seconds=getattr(server, "timeout_seconds", 30.0),
+                    max_retries=getattr(server, "max_retries", 3),
+                    backoff_initial_seconds=getattr(server, "backoff_initial_seconds", 0.5),
+                    backoff_max_seconds=getattr(server, "backoff_max_seconds", 5.0),
+                )
+            t = HTTPTransport(server.url, timeout_seconds=getattr(server, "timeout_seconds", 30.0))
             return MCPClientSession(t, server_name=server.name)
 
     def openai_tools(self) -> list[dict]:
@@ -213,15 +233,63 @@ class MCPManager:
         if session is None:
             raise RuntimeError(f"MCP server not connected: {binding.server_name}")
 
-        if binding.kind == "filesystem":
-            guard_filesystem_tool_args(self._workspace_root, binding.mcp_tool_name, arguments)
+        # Workaround: Some MCP weather server deployments appear to mis-handle `timezone`
+        # and forward it as `forecast_days` to Open-Meteo, producing 400s.
+        # Since timezone is optional (default exists), we omit it for these tools.
+        original_args = arguments
+        call_args = arguments
+        if binding.mcp_tool_name in ("weather.get_current", "weather.get_forecast"):
+            if isinstance(arguments, dict) and "timezone" in arguments:
+                call_args = dict(arguments)
+                call_args.pop("timezone", None)
+                # Log the sanitize step (debug by default; promotable via MCP_LOG_VERBOSE=1).
+                try:
+                    (logger.info if _truthy_env("MCP_LOG_VERBOSE") else logger.debug)(
+                        json.dumps(
+                            {
+                                "event": "tool_args_sanitized",
+                                "openai_tool": openai_tool_name,
+                                "server": binding.server_name,
+                                "mcp_tool": binding.mcp_tool_name,
+                                "removed": ["timezone"],
+                                "before": original_args,
+                                "after": call_args,
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                except Exception:
+                    pass
 
-        result = await session.call_tool(binding.mcp_tool_name, arguments)
+        if binding.kind == "filesystem":
+            guard_filesystem_tool_args(self._workspace_root, binding.mcp_tool_name, call_args)
+
+        result = await session.call_tool(binding.mcp_tool_name, call_args)
 
         if binding.kind == "fetch":
             guard_fetch_tool_result(binding.mcp_tool_name, result)
 
-        return to_jsonable(result)
+        out = to_jsonable(result)
+        # Detailed tracing (debug by default; can be promoted to info via MCP_LOG_VERBOSE=1).
+        try:
+            (logger.info if _truthy_env("MCP_LOG_VERBOSE") else logger.debug)(
+                json.dumps(
+                    {
+                        "event": "tool_result",
+                        "openai_tool": openai_tool_name,
+                        "server": binding.server_name,
+                        "mcp_tool": binding.mcp_tool_name,
+                        "kind": binding.kind,
+                        "arguments": call_args,
+                        "result": out,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        except Exception:
+            # Never fail tool execution due to logging.
+            pass
+        return out
 
 
 _MANAGER: Optional[MCPManager] = None

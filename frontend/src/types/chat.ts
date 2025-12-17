@@ -13,6 +13,7 @@ export interface ChatRequest {
   temperature?: number;
   max_tokens?: number;
   // Optional MCP per-request overrides (backend supports these).
+  mcp_enabled?: boolean | null;
   mcp_config_path?: string | null;
   workspace_root?: string | null;
 }
