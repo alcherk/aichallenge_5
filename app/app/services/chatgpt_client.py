@@ -11,6 +11,9 @@ import httpx
 from ..config import get_settings
 from ..schemas import ChatRequest, ChatResponse
 from ..mcp.manager import ensure_mcp_manager
+from ..rag.chunkenizer_adapter import retrieve_chunks
+from ..rag.context_builder import build_context_block
+from ..rag.prompt_injector import inject_rag_context
 
 logger = logging.getLogger("app.openai")
 
@@ -203,6 +206,44 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
     }
 
     messages = _prepare_messages(payload)
+    
+    # RAG retrieval (if enabled)
+    if settings.rag_enabled:
+        # Extract latest user message for retrieval query
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        if user_messages:
+            query = user_messages[-1].get("content", "")
+            if query and query.strip():
+                logger.debug(
+                    "RAG retrieval starting query_len=%d top_k=%d",
+                    len(query),
+                    settings.rag_top_k,
+                )
+                chunks = await retrieve_chunks(
+                    query=query,
+                    top_k=settings.rag_top_k,
+                    base_url=settings.chunkenizer_api_url,
+                )
+                if chunks:
+                    context = build_context_block(chunks, settings.rag_max_context_chars)
+                    if context:
+                        messages = inject_rag_context(messages, context)
+                        logger.info(
+                            "RAG context injected chunks=%d context_size=%d",
+                            len(chunks),
+                            len(context),
+                        )
+                    else:
+                        logger.debug("RAG context block empty after formatting")
+                else:
+                    logger.debug("RAG retrieval returned no chunks")
+            else:
+                logger.debug("RAG skipped: empty user query")
+        else:
+            logger.debug("RAG skipped: no user messages found")
+    else:
+        logger.debug("RAG disabled")
+    
     base_input = _messages_to_responses_input(messages)
     
     mcp_enabled = bool(payload.mcp_enabled) if payload.mcp_enabled is not None else bool(
@@ -364,6 +405,44 @@ async def stream_chatgpt(payload: ChatRequest):
     }
 
     base_messages = _prepare_messages(payload)
+    
+    # RAG retrieval (if enabled)
+    if settings.rag_enabled:
+        # Extract latest user message for retrieval query
+        user_messages = [m for m in base_messages if m.get("role") == "user"]
+        if user_messages:
+            query = user_messages[-1].get("content", "")
+            if query and query.strip():
+                logger.debug(
+                    "RAG retrieval starting (stream) query_len=%d top_k=%d",
+                    len(query),
+                    settings.rag_top_k,
+                )
+                chunks = await retrieve_chunks(
+                    query=query,
+                    top_k=settings.rag_top_k,
+                    base_url=settings.chunkenizer_api_url,
+                )
+                if chunks:
+                    context = build_context_block(chunks, settings.rag_max_context_chars)
+                    if context:
+                        base_messages = inject_rag_context(base_messages, context)
+                        logger.info(
+                            "RAG context injected (stream) chunks=%d context_size=%d",
+                            len(chunks),
+                            len(context),
+                        )
+                    else:
+                        logger.debug("RAG context block empty after formatting (stream)")
+                else:
+                    logger.debug("RAG retrieval returned no chunks (stream)")
+            else:
+                logger.debug("RAG skipped: empty user query (stream)")
+        else:
+            logger.debug("RAG skipped: no user messages found (stream)")
+    else:
+        logger.debug("RAG disabled (stream)")
+    
     base_input = _messages_to_responses_input(base_messages)
     mcp_enabled = bool(payload.mcp_enabled) if payload.mcp_enabled is not None else bool(
         payload.mcp_config_path or settings.mcp_config_path

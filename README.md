@@ -88,6 +88,84 @@ docker compose up -d --build
 - `APP_PORT` - Default: `8333`
 - `MCP_CONFIG_PATH` - Path to MCP server config JSON (optional; disabled by default)
 - `WORKSPACE_ROOT` - Workspace root for filesystem-like MCP tools (default: repo root)
+- `RAG_ENABLED` - Enable RAG (Retrieval-Augmented Generation) - Default: `true`
+- `RAG_TOP_K` - Number of document chunks to retrieve - Default: `5`
+- `RAG_MAX_CONTEXT_CHARS` - Maximum context size in characters - Default: `8000`
+- `CHUNKENIZER_API_URL` - Chunkenizer API base URL - Default: `http://localhost:8000`
+
+## RAG (Retrieval-Augmented Generation) (Optional)
+
+This project supports **RAG** to enhance chat responses with retrieved document context from Chunkenizer.
+
+- RAG is **enabled by default** (set `RAG_ENABLED=false` to disable)
+- When enabled, the chat service retrieves relevant document chunks from Chunkenizer before generating responses
+- Responses include citations in the format `[doc_name:doc_id:chunk_index]`
+
+### How RAG Works
+
+1. **Document Ingestion**: Upload documents to Chunkenizer (see [Chunkenizer Setup](#chunkenizer-setup))
+2. **Query Processing**: When a user sends a message, the service:
+   - Extracts the user's question
+   - Calls Chunkenizer's `/search` endpoint to retrieve top-k relevant chunks
+   - Formats the chunks with citations
+   - Injects the context into the prompt with instructions to cite sources
+3. **Response Generation**: The LLM generates a response using the provided context and includes citations
+
+### Chunkenizer Setup
+
+1. **Start Chunkenizer** (if not already running):
+   ```bash
+   cd ../Chunkenizer
+   docker-compose up -d
+   # Or run locally: python -m app.main
+   ```
+
+2. **Upload Documents**:
+   ```bash
+   # Via API
+   curl -X POST http://localhost:8000/documents \
+     -F "file=@document.txt" \
+     -F "metadata_json={\"source\": \"docs\"}"
+   
+   # Or use the web UI at http://localhost:8000
+   ```
+
+3. **Verify Chunkenizer is accessible**:
+   ```bash
+   curl http://localhost:8000/api/health
+   ```
+
+### RAG Configuration
+
+- `RAG_ENABLED`: Enable/disable RAG (default: `true`)
+- `RAG_TOP_K`: Number of chunks to retrieve per query (default: `5`)
+- `RAG_MAX_CONTEXT_CHARS`: Maximum context size before truncation (default: `8000`)
+- `CHUNKENIZER_API_URL`: Chunkenizer API base URL (default: `http://localhost:8000`)
+
+### Example Request with RAG
+
+```bash
+curl -X POST http://localhost:8333/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "What is machine learning?"}
+    ],
+    "model": "gpt-4o-mini"
+  }'
+```
+
+The response will include information from retrieved document chunks, with citations like `[document.txt:doc-123:0]` when referencing specific chunks. The citation format includes the document name, document ID, and chunk index.
+
+### Disabling RAG
+
+To disable RAG and use the chat service without document retrieval:
+
+```bash
+export RAG_ENABLED=false
+```
+
+Or set it in your environment/docker-compose configuration.
 
 ## MCP (Model Context Protocol) Tools (Optional)
 
@@ -131,6 +209,10 @@ The config file is JSON with a `servers` array. Each server supports:
 │       ├── schemas.py        # Pydantic models
 │       ├── services/
 │       │   └── chatgpt_client.py  # OpenAI API client
+│       ├── rag/              # RAG (Retrieval-Augmented Generation)
+│       │   ├── chunkenizer_adapter.py  # Chunkenizer API adapter
+│       │   ├── context_builder.py      # Context formatting
+│       │   └── prompt_injector.py      # Prompt injection
 │       ├── static/           # Legacy frontend (fallback)
 │       └── templates/        # Legacy templates
 ├── frontend/                 # React + TypeScript SPA
@@ -237,6 +319,8 @@ Content-Type: application/json
 
 Response: StructuredResponse with data, metadata, error fields
 ```
+
+**Note**: If RAG is enabled, the service will automatically retrieve relevant document chunks from Chunkenizer and include them in the context. Responses will include citations in the format `[doc_name:doc_id:chunk_index]`.
 
 ### Chat (Streaming)
 ```bash

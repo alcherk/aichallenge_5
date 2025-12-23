@@ -38,6 +38,13 @@ class Settings:
         default_root = Path(__file__).resolve().parents[2]
         self.workspace_root: str = os.getenv("WORKSPACE_ROOT", str(default_root)).strip()
 
+        # RAG (Retrieval-Augmented Generation) configuration
+        rag_enabled_str = os.getenv("RAG_ENABLED", "true").strip().lower()
+        self.rag_enabled: bool = rag_enabled_str in {"1", "true", "yes", "y", "on"}
+        self.rag_top_k: int = int(os.getenv("RAG_TOP_K", "5"))
+        self.rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "8000"))
+        self.chunkenizer_api_url: str = os.getenv("CHUNKENIZER_API_URL", "http://localhost:8000").strip()
+
 
 @lru_cache()
 def get_settings() -> Settings:
