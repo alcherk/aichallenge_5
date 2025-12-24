@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import type { Message, StructuredResponse } from '@/types';
 import { extractJSON, syntaxHighlightJSON } from '@/utils/json';
+import { RagDecisionPanel } from '@/components/rag/RagDecisionPanel';
 
 interface ChatMessageProps {
   message: Message;
@@ -80,6 +81,11 @@ export const ChatMessage: React.FC<ChatMessageProps> = ({ message, fullResponse 
             <p className="whitespace-pre-wrap">{content}</p>
           )}
         </div>
+
+        {/* RAG Decision Panel */}
+        {isAssistant && fullResponse?.metadata?.rag && (
+          <RagDecisionPanel ragMetadata={fullResponse.metadata.rag} />
+        )}
 
         {/* Show full response button for assistant messages */}
         {isAssistant && fullResponse && (

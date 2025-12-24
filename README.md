@@ -92,6 +92,16 @@ docker compose up -d --build
 - `RAG_TOP_K` - Number of document chunks to retrieve - Default: `5`
 - `RAG_MAX_CONTEXT_CHARS` - Maximum context size in characters - Default: `8000`
 - `CHUNKENIZER_API_URL` - Chunkenizer API base URL - Default: `http://localhost:8000`
+- `RAG_MIN_SIMILARITY` - Minimum similarity score threshold (0.0-1.0) - Default: `0.0`
+- `RAG_MIN_CHUNKS` - Minimum chunks to keep after filtering - Default: `2`
+- `RAG_RERANKER_ENABLED` - Enable reranking - Default: `false`
+- `RAG_RERANKER_TYPE` - Reranker type (`noop`, etc.) - Default: `noop`
+- `RAG_COMPARE_MODE` - Enable comparison mode (baseline vs enhanced) - Default: `false`
+- `RAG_MIN_SIMILARITY` - Minimum similarity score threshold (0.0-1.0) - Default: `0.0`
+- `RAG_MIN_CHUNKS` - Minimum chunks to keep after filtering - Default: `2`
+- `RAG_RERANKER_ENABLED` - Enable reranking - Default: `false`
+- `RAG_RERANKER_TYPE` - Reranker type (`noop`, etc.) - Default: `noop`
+- `RAG_COMPARE_MODE` - Enable comparison mode (baseline vs enhanced) - Default: `false`
 
 ## RAG (Retrieval-Augmented Generation) (Optional)
 
@@ -141,6 +151,31 @@ This project supports **RAG** to enhance chat responses with retrieved document 
 - `RAG_TOP_K`: Number of chunks to retrieve per query (default: `5`)
 - `RAG_MAX_CONTEXT_CHARS`: Maximum context size before truncation (default: `8000`)
 - `CHUNKENIZER_API_URL`: Chunkenizer API base URL (default: `http://localhost:8000`)
+
+#### Second-Stage Filtering and Reranking
+
+- `RAG_MIN_SIMILARITY`: Minimum similarity score threshold (default: `0.0`)
+  - Filters out chunks with similarity score below this threshold
+  - Range: 0.0-1.0 (cosine similarity, higher = more similar)
+  - Default `0.0` passes all chunks (backward compatible)
+  - Recommended: `0.3-0.7` depending on your use case
+  
+- `RAG_MIN_CHUNKS`: Minimum chunks to keep after filtering (default: `2`)
+  - Fallback: if filtering removes too many chunks, keeps top N by score
+  - Prevents empty context when threshold is too high
+
+- `RAG_RERANKER_ENABLED`: Enable reranking (default: `false`)
+  - Currently supports `NoOpReranker` (passthrough)
+  - Future: cross-encoder and LLM-based rerankers
+
+- `RAG_RERANKER_TYPE`: Type of reranker to use (default: `"noop"`)
+  - Options: `"noop"` (no reranking, preserves original order)
+
+- `RAG_COMPARE_MODE`: Enable comparison mode (default: `false`)
+  - When enabled, generates two answers:
+    1. Baseline: using original chunks (no filter/rerank)
+    2. Enhanced: using filtered/reranked chunks
+  - Both answers included in response for quality comparison
 
 ### Example Request with RAG
 

@@ -37,6 +37,25 @@ export interface ChatResponse {
   usage?: TokenUsage;
 }
 
+export interface RAGMetadata {
+  enabled: boolean;
+  initial_chunks?: number;
+  filtered_chunks?: number;
+  final_chunks?: number;
+  threshold?: number;
+  fallback_triggered?: boolean;
+  reranker_enabled?: boolean;
+  reranker_type?: string | null;
+  scores_range?: [number, number] | null;
+  initial_scores?: number[];
+  filtered_scores?: number[];
+  context_size?: number;
+  compare_mode?: boolean;
+  baseline_answer?: string;
+  enhanced_answer?: string;
+  error?: string;
+}
+
 export interface StructuredResponse {
   success: boolean;
   status_code: number;
@@ -53,6 +72,7 @@ export interface StructuredResponse {
     model: string;
     processing_time_ms: number;
     token_usage?: TokenUsage;
+    rag?: RAGMetadata;
   } | null;
 }
 

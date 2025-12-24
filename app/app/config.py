@@ -44,6 +44,15 @@ class Settings:
         self.rag_top_k: int = int(os.getenv("RAG_TOP_K", "5"))
         self.rag_max_context_chars: int = int(os.getenv("RAG_MAX_CONTEXT_CHARS", "8000"))
         self.chunkenizer_api_url: str = os.getenv("CHUNKENIZER_API_URL", "http://localhost:8000").strip()
+        
+        # RAG second-stage filtering and reranking
+        self.rag_min_similarity: float = float(os.getenv("RAG_MIN_SIMILARITY", "0.0"))
+        self.rag_min_chunks: int = int(os.getenv("RAG_MIN_CHUNKS", "2"))
+        rag_reranker_enabled_str = os.getenv("RAG_RERANKER_ENABLED", "false").strip().lower()
+        self.rag_reranker_enabled: bool = rag_reranker_enabled_str in {"1", "true", "yes", "y", "on"}
+        self.rag_reranker_type: str = os.getenv("RAG_RERANKER_TYPE", "noop").strip().lower()
+        rag_compare_mode_str = os.getenv("RAG_COMPARE_MODE", "false").strip().lower()
+        self.rag_compare_mode: bool = rag_compare_mode_str in {"1", "true", "yes", "y", "on"}
 
 
 @lru_cache()

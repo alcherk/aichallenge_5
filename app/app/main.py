@@ -375,7 +375,7 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
     )
     
     try:
-        chat_response = await call_chatgpt(request)
+        chat_response, rag_metadata = await call_chatgpt(request)
         
         # Assistant response is now plain text/markdown - no JSON formatting needed
         
@@ -388,19 +388,26 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
                 "total_tokens": chat_response.usage.total_tokens,
             }
         
+        # Build metadata dict
+        metadata_dict = {
+            "timestamp": time.time(),
+            "request_id": request_id,
+            "model": chat_response.model,
+            "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+            "token_usage": token_usage,
+        }
+        
+        # Add RAG metadata if available
+        if rag_metadata:
+            metadata_dict["rag"] = rag_metadata
+        
         return StructuredResponse(
             success=True,
             status_code=200,
             message="Chat completion successful",
             data=chat_response,
             error=None,
-            metadata={
-                "timestamp": time.time(),
-                "request_id": request_id,
-                "model": chat_response.model,
-                "processing_time_ms": round((time.time() - start_time) * 1000, 2),
-                "token_usage": token_usage,
-            },
+            metadata=metadata_dict,
         )
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code

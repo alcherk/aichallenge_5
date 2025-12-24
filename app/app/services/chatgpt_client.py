@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import logging
 import os
 
@@ -14,6 +14,8 @@ from ..mcp.manager import ensure_mcp_manager
 from ..rag.chunkenizer_adapter import retrieve_chunks
 from ..rag.context_builder import build_context_block
 from ..rag.prompt_injector import inject_rag_context
+from ..rag.filter import filter_by_similarity
+from ..rag.reranker import get_reranker
 
 logger = logging.getLogger("app.openai")
 
@@ -194,75 +196,21 @@ def _normalize_tool_calls(tool_calls: Any) -> List[Dict[str, Any]]:
     return out
 
 
-async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
-    settings = get_settings()
-
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY is not configured")
-
-    headers = {
-        "Authorization": f"Bearer {settings.openai_api_key}",
-        "Content-Type": "application/json",
-    }
-
-    messages = _prepare_messages(payload)
-    
-    # RAG retrieval (if enabled)
-    if settings.rag_enabled:
-        # Extract latest user message for retrieval query
-        user_messages = [m for m in messages if m.get("role") == "user"]
-        if user_messages:
-            query = user_messages[-1].get("content", "")
-            if query and query.strip():
-                logger.debug(
-                    "RAG retrieval starting query_len=%d top_k=%d",
-                    len(query),
-                    settings.rag_top_k,
-                )
-                chunks = await retrieve_chunks(
-                    query=query,
-                    top_k=settings.rag_top_k,
-                    base_url=settings.chunkenizer_api_url,
-                )
-                if chunks:
-                    context = build_context_block(chunks, settings.rag_max_context_chars)
-                    if context:
-                        messages = inject_rag_context(messages, context)
-                        logger.info(
-                            "RAG context injected chunks=%d context_size=%d",
-                            len(chunks),
-                            len(context),
-                        )
-                    else:
-                        logger.debug("RAG context block empty after formatting")
-                else:
-                    logger.debug("RAG retrieval returned no chunks")
-            else:
-                logger.debug("RAG skipped: empty user query")
-        else:
-            logger.debug("RAG skipped: no user messages found")
-    else:
-        logger.debug("RAG disabled")
-    
+async def _generate_single_answer(
+    payload: ChatRequest,
+    messages: List[Dict[str, Any]],
+    settings: Any,
+    headers: Dict[str, str],
+    mgr: Any,
+    resp_tools: List[Dict[str, Any]],
+) -> ChatResponse:
+    """
+    Helper function to generate a single LLM answer given prepared messages.
+    Used for comparison mode to generate baseline and enhanced answers.
+    """
     base_input = _messages_to_responses_input(messages)
     
-    mcp_enabled = bool(payload.mcp_enabled) if payload.mcp_enabled is not None else bool(
-        payload.mcp_config_path or settings.mcp_config_path
-    )
-    mgr = await ensure_mcp_manager(
-        mcp_config_path=(
-            (payload.mcp_config_path or settings.mcp_config_path or None) if mcp_enabled else None
-        ),
-        workspace_root=Path(payload.workspace_root or settings.workspace_root),
-    )
-    tools = mgr.openai_tools() if mgr is not None else []
-    resp_tools = _tools_to_responses_api(tools) if tools else []
-
-    # Tool loop (server-side): assistant -> tool_calls -> tool results -> assistant
-    # This is bounded to prevent infinite loops.
-    tool_messages: List[Dict[str, Any]] = list(messages)
     max_rounds = 8
-
     async with httpx.AsyncClient(timeout=settings.request_timeout_seconds) as client:
         previous_response_id: Optional[str] = None
         for _ in range(max_rounds):
@@ -285,39 +233,12 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
             base = str(settings.openai_api_base).rstrip("/")
             path = str(getattr(settings, "openai_chat_path", "chat/responses")).lstrip("/")
             url = f"{base}/{path}"
-            logger.debug(
-                "call_chatgpt upstream request url=%s model=%s input_items=%d tools=%d temperature=%s max_tokens=%s previous_response_id=%s",
-                url,
-                body.get("model"),
-                len(base_input),
-                len(resp_tools) if resp_tools else 0,
-                body.get("temperature"),
-                body.get("max_tokens"),
-                previous_response_id,
-            )
-            if _truthy_env("HTTP_LOG_POST_PAYLOADS"):
-                preview, truncated = _json_preview(body)
-                logger.info(
-                    json.dumps(
-                        {
-                            "event": "http_post_payload",
-                            "target": "openai",
-                            "url": url,
-                            "truncated": truncated,
-                            "payload": preview,
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-            response = await client.post(
-                url, json=body, headers=headers
-            )
-            # Let callers surface full upstream error bodies (JSON/text) for debugging.
+            
+            response = await client.post(url, json=body, headers=headers)
             response.raise_for_status()
-
             data = response.json()
 
-            # Responses API tool calls appear as output items with type "function_call".
+            # Handle tool calls (same as original)
             output = data.get("output") or []
             function_calls: List[Dict[str, Any]] = []
             if isinstance(output, list):
@@ -345,47 +266,190 @@ async def call_chatgpt(payload: ChatRequest) -> ChatResponse:
                         args = {}
                     try:
                         result = await mgr.call_openai_tool(str(name), args)
-                        tool_outputs.append(
-                            {
-                                "type": "function_call_output",
-                                "call_id": call_id,
-                                "output": json.dumps(result, ensure_ascii=False),
-                            }
-                        )
+                        tool_outputs.append({
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": json.dumps(result, ensure_ascii=False),
+                        })
                     except Exception as e:
-                        tool_outputs.append(
-                            {
-                                "type": "function_call_output",
-                                "call_id": call_id,
-                                "output": json.dumps(
-                                    {"error": {"type": type(e).__name__, "detail": str(e)}},
-                                    ensure_ascii=False,
-                                ),
-                            }
-                        )
+                        tool_outputs.append({
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": json.dumps(
+                                {"error": {"type": type(e).__name__, "detail": str(e)}},
+                                ensure_ascii=False,
+                            ),
+                        })
 
-                # Continue the conversation using previous_response_id and only tool outputs as new input.
                 previous_response_id = response_id
                 base_input = tool_outputs
                 continue
 
-            # Final text response -> adapt to ChatResponse shape for the UI.
+            # Final text response
             full_text = _extract_text_from_responses(data)
             usage_obj = _responses_usage_to_chat_usage(data)
             return ChatResponse(
                 id=str(data.get("id") or "resp"),
                 model=str(data.get("model") or (payload.model or settings.openai_model)),
-                choices=[
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": full_text},
-                        "finish_reason": "stop",
-                    }
-                ],
+                choices=[{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": full_text},
+                    "finish_reason": "stop",
+                }],
                 usage=usage_obj,
             )
 
     raise RuntimeError("Tool loop exceeded maximum rounds")
+
+
+async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dict[str, Any]]]:
+    settings = get_settings()
+
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is not configured")
+
+    headers = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    messages = _prepare_messages(payload)
+    
+    # Store baseline messages for comparison mode (before RAG processing)
+    baseline_messages = None
+    rag_metadata = None  # Will store RAG decision-making metadata
+    
+    # RAG retrieval (if enabled)
+    if settings.rag_enabled:
+        # Extract latest user message for retrieval query
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        if user_messages:
+            query = user_messages[-1].get("content", "")
+            if query and query.strip():
+                logger.debug(
+                    "RAG retrieval starting query_len=%d top_k=%d",
+                    len(query),
+                    settings.rag_top_k,
+                )
+                chunks = await retrieve_chunks(
+                    query=query,
+                    top_k=settings.rag_top_k,
+                    base_url=settings.chunkenizer_api_url,
+                )
+                if chunks:
+                    # Store baseline messages for comparison mode (before filtering/reranking)
+                    if settings.rag_compare_mode:
+                        baseline_messages = [m.copy() for m in messages]
+                        baseline_context = build_context_block(chunks, settings.rag_max_context_chars)
+                        if baseline_context:
+                            baseline_messages = inject_rag_context(baseline_messages, baseline_context)
+                        logger.debug("RAG comparison mode: baseline messages prepared chunks=%d", len(chunks))
+                    
+                    # Collect initial chunk scores for metadata
+                    initial_scores = [chunk.get("score", 0.0) for chunk in chunks]
+                    
+                    # Second-stage filtering by similarity threshold
+                    filtered_chunks, filter_metadata = filter_by_similarity(
+                        chunks,
+                        threshold=settings.rag_min_similarity,
+                        min_chunks=settings.rag_min_chunks,
+                    )
+                    
+                    # Collect filtered chunk scores
+                    filtered_scores = [chunk.get("score", 0.0) for chunk in filtered_chunks]
+                    
+                    # Reranking (if enabled)
+                    reranker_applied = False
+                    if settings.rag_reranker_enabled:
+                        reranker = get_reranker(settings.rag_reranker_type)
+                        filtered_chunks = await reranker.rerank(query, filtered_chunks)
+                        reranker_applied = True
+                        logger.debug(
+                            "RAG reranker applied type=%s chunks=%d",
+                            settings.rag_reranker_type,
+                            len(filtered_chunks),
+                        )
+                    
+                    # Build context from filtered/reranked chunks
+                    context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
+                    if context:
+                        messages = inject_rag_context(messages, context)
+                        
+                        # Build RAG metadata for UI
+                        rag_metadata = {
+                            "enabled": True,
+                            "initial_chunks": len(chunks),
+                            "filtered_chunks": filter_metadata["filtered_count"],
+                            "final_chunks": len(filtered_chunks),
+                            "threshold": settings.rag_min_similarity,
+                            "fallback_triggered": filter_metadata["fallback_triggered"],
+                            "reranker_enabled": settings.rag_reranker_enabled,
+                            "reranker_type": settings.rag_reranker_type if settings.rag_reranker_enabled else None,
+                            "scores_range": filter_metadata["scores_range"],
+                            "initial_scores": initial_scores,
+                            "filtered_scores": filtered_scores,
+                            "context_size": len(context),
+                            "compare_mode": settings.rag_compare_mode,
+                        }
+                        
+                        logger.info(
+                            "RAG context injected initial_k=%d filtered_k=%d final_k=%d "
+                            "threshold=%.3f fallback=%s reranker=%s context_size=%d",
+                            len(chunks),
+                            filter_metadata["filtered_count"],
+                            len(filtered_chunks),
+                            settings.rag_min_similarity,
+                            filter_metadata["fallback_triggered"],
+                            settings.rag_reranker_type if settings.rag_reranker_enabled else "none",
+                            len(context),
+                        )
+                    else:
+                        logger.debug("RAG context block empty after formatting")
+                else:
+                    rag_metadata = {"enabled": True, "initial_chunks": 0, "error": "No chunks retrieved"}
+                    logger.debug("RAG retrieval returned no chunks")
+            else:
+                logger.debug("RAG skipped: empty user query")
+        else:
+            logger.debug("RAG skipped: no user messages found")
+    else:
+        logger.debug("RAG disabled")
+    
+    mcp_enabled = bool(payload.mcp_enabled) if payload.mcp_enabled is not None else bool(
+        payload.mcp_config_path or settings.mcp_config_path
+    )
+    mgr = await ensure_mcp_manager(
+        mcp_config_path=(
+            (payload.mcp_config_path or settings.mcp_config_path or None) if mcp_enabled else None
+        ),
+        workspace_root=Path(payload.workspace_root or settings.workspace_root),
+    )
+    tools = mgr.openai_tools() if mgr is not None else []
+    resp_tools = _tools_to_responses_api(tools) if tools else []
+
+    # Comparison mode: generate baseline and enhanced answers
+    if settings.rag_compare_mode and settings.rag_enabled and baseline_messages:
+        logger.info("RAG comparison mode: generating baseline and enhanced answers")
+        try:
+            baseline_response = await _generate_single_answer(
+                payload, baseline_messages, settings, headers, mgr, resp_tools
+            )
+            enhanced_response = await _generate_single_answer(
+                payload, messages, settings, headers, mgr, resp_tools
+            )
+            # Add comparison metadata
+            if rag_metadata:
+                rag_metadata["baseline_answer"] = baseline_response.choices[0].message.content
+                rag_metadata["enhanced_answer"] = enhanced_response.choices[0].message.content
+            return enhanced_response, rag_metadata
+        except Exception as e:
+            logger.error("RAG comparison mode error: %s", e, exc_info=True)
+            # Fall back to normal mode
+            logger.warning("Falling back to normal mode due to comparison error")
+    
+    # Normal mode: generate single answer
+    response = await _generate_single_answer(payload, messages, settings, headers, mgr, resp_tools)
+    return response, rag_metadata
 
 
 async def stream_chatgpt(payload: ChatRequest):
@@ -424,12 +488,39 @@ async def stream_chatgpt(payload: ChatRequest):
                     base_url=settings.chunkenizer_api_url,
                 )
                 if chunks:
-                    context = build_context_block(chunks, settings.rag_max_context_chars)
+                    # Store baseline chunks for comparison mode
+                    baseline_chunks = chunks.copy() if settings.rag_compare_mode else None
+                    
+                    # Second-stage filtering by similarity threshold
+                    filtered_chunks, filter_metadata = filter_by_similarity(
+                        chunks,
+                        threshold=settings.rag_min_similarity,
+                        min_chunks=settings.rag_min_chunks,
+                    )
+                    
+                    # Reranking (if enabled)
+                    if settings.rag_reranker_enabled:
+                        reranker = get_reranker(settings.rag_reranker_type)
+                        filtered_chunks = await reranker.rerank(query, filtered_chunks)
+                        logger.debug(
+                            "RAG reranker applied (stream) type=%s chunks=%d",
+                            settings.rag_reranker_type,
+                            len(filtered_chunks),
+                        )
+                    
+                    # Build context from filtered/reranked chunks
+                    context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
                     if context:
                         base_messages = inject_rag_context(base_messages, context)
                         logger.info(
-                            "RAG context injected (stream) chunks=%d context_size=%d",
+                            "RAG context injected (stream) initial_k=%d filtered_k=%d final_k=%d "
+                            "threshold=%.3f fallback=%s reranker=%s context_size=%d",
                             len(chunks),
+                            filter_metadata["filtered_count"],
+                            len(filtered_chunks),
+                            settings.rag_min_similarity,
+                            filter_metadata["fallback_triggered"],
+                            settings.rag_reranker_type if settings.rag_reranker_enabled else "none",
                             len(context),
                         )
                     else:

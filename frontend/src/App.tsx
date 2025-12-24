@@ -7,7 +7,6 @@ import { Header } from './components/layout/Header';
 import { ChatContainer } from './components/chat/ChatContainer';
 import { SettingsPanel } from './components/settings/SettingsPanel';
 import { MetricsPanel } from './components/metrics/MetricsPanel';
-import { chatAPI } from './services/api';
 
 type ToastKind = 'info' | 'error';
 type ToastState = {
@@ -19,16 +18,8 @@ type ToastState = {
 
 function App() {
   const { loadFromStorage: loadChat, clearMessages } = useChatStore();
-  const {
-    loadFromStorage: loadSettings,
-    systemPrompt,
-    temperature,
-    model,
-    mcpEnabled,
-    mcpConfigPath,
-    workspaceRoot,
-  } = useSettingsStore();
-  const { loadFromStorage: loadMetrics, updateMetrics } = useMetricsStore();
+  const { loadFromStorage: loadSettings } = useSettingsStore();
+  const { loadFromStorage: loadMetrics } = useMetricsStore();
 
   const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState<ToastState>({
@@ -48,77 +39,6 @@ function App() {
 
   const handleNewChat = () => {
     clearMessages();
-
-    // Auto weather summary on new chat.
-    // This uses the non-streaming /api/chat endpoint because the streaming endpoint
-    // intentionally disables MCP overrides and does not support the server-side tool loop.
-    const weatherPrompt =
-      'Check the weather for Nizhniy Novgorod (Russia). ' +
-      'Return EXACTLY two lines:\n' +
-      '1) Weather: 4-5 words (how it feels now)\n' +
-      '2) Clothing: 3-5 words (what to wear)\n' +
-      'No extra text.';
-
-    const fallbackConfigPath = '/Users/lex/Projects/ai/AI_Challenge_5/week1_day1/mcp_servers.json';
-    const effectiveConfigPath = (mcpConfigPath && mcpConfigPath.trim()) || fallbackConfigPath;
-
-    if (toastTimerRef.current) {
-      window.clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-
-    void (async () => {
-      try {
-        const userMessage = { role: 'user' as const, content: weatherPrompt };
-        const resp = await chatAPI.sendMessage({
-          messages: [{ role: 'system', content: systemPrompt }, userMessage],
-          model,
-          temperature,
-          // Ensure MCP is enabled for this request and point at the weather server config.
-          mcp_enabled: true,
-          mcp_config_path: (mcpEnabled ? effectiveConfigPath : effectiveConfigPath) || null,
-          workspace_root: (workspaceRoot && workspaceRoot.trim()) || null,
-        });
-
-        const assistantText =
-          resp?.data?.choices?.[0]?.message?.content ||
-          (resp?.success ? '' : resp?.error?.detail) ||
-          '';
-
-        if (resp?.success && assistantText) {
-          updateMetrics(resp);
-          setToast({
-            open: true,
-            kind: 'info',
-            title: 'Weather',
-            message: assistantText,
-          });
-        } else {
-          setToast({
-            open: true,
-            kind: 'error',
-            title: 'Weather error',
-            message:
-              assistantText ||
-              resp?.error?.detail ||
-              'Failed to generate weather summary. Check MCP config path.',
-          });
-        }
-      } catch (e) {
-        setToast({
-          open: true,
-          kind: 'error',
-          title: 'Weather error',
-          message: e instanceof Error ? e.message : 'Failed to fetch weather summary',
-        });
-      } finally {
-        // Only start auto-hide once a toast is shown (i.e., after the request completes).
-        toastTimerRef.current = window.setTimeout(() => {
-          setToast((t) => ({ ...t, open: false }));
-          toastTimerRef.current = null;
-        }, 10000);
-      }
-    })();
   };
 
   return (
