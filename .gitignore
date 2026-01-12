@@ -32,3 +32,6 @@ htmlcov/
 
 # OS
 Thumbs.db
+
+# RAG index state
+.rag_index_state.json

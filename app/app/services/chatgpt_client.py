@@ -16,6 +16,8 @@ from ..rag.context_builder import build_context_block
 from ..rag.prompt_injector import inject_rag_context
 from ..rag.filter import filter_by_similarity
 from ..rag.reranker import get_reranker
+from ..rag.project_detector import is_project_question, extract_help_query
+from ..rag.git_context import get_git_context, format_git_context
 
 logger = logging.getLogger("app.openai")
 
@@ -319,6 +321,72 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
     baseline_messages = None
     rag_metadata = None  # Will store RAG decision-making metadata
     
+    # Developer assistant mode: detect project questions and /help command
+    is_help_command = False
+    is_project_related = False
+    git_context_str = ""
+    dev_assistant_system_prompt = None
+    
+    if settings.dev_assistant_mode:
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        if user_messages:
+            user_query = user_messages[-1].get("content", "")
+            if user_query and user_query.strip():
+                # Check for /help command
+                if user_query.strip().lower().startswith("/help"):
+                    is_help_command = True
+                    original_query = user_query
+                    user_query = extract_help_query(user_query)
+                    logger.info(f"/help command detected: '{original_query}' -> '{user_query}'")
+                    # Update the user message with extracted query for RAG search
+                    messages[-1]["content"] = user_query
+                    is_project_related = True
+                    # For /help, we want to search in RAG with the extracted question
+                    # The query will be used for RAG retrieval below
+                else:
+                    # Check if question is about the project
+                    is_project_related = is_project_question(user_query)
+                
+                # If project-related, get git context and set system prompt
+                if is_project_related:
+                    # Get MCP manager for git context (always try builtin manager for git server)
+                    try:
+                        # Always try to get builtin MCP manager (includes git server)
+                        mcp_mgr = await ensure_mcp_manager(
+                            mcp_config_path=(
+                                payload.mcp_config_path or settings.mcp_config_path or None
+                            ),
+                            workspace_root=Path(payload.workspace_root or settings.workspace_root),
+                        )
+                        
+                        if mcp_mgr:
+                            git_context = await get_git_context(mcp_mgr, Path(payload.workspace_root or settings.workspace_root))
+                            if git_context:
+                                git_context_str = format_git_context(git_context)
+                                logger.debug(f"Git context retrieved: branch={git_context.get('branch')}")
+                    except Exception as e:
+                        logger.warning(f"Failed to get git context for developer assistant: {e}", exc_info=True)
+                        # Continue without git context - not critical
+                    
+                    # Set developer assistant system prompt
+                    dev_assistant_system_prompt = (
+                        "Ты ассистент разработчика для этого проекта. "
+                        "Используй предоставленную документацию и Git контекст для ответов. "
+                        "Отвечай на основе документации проекта. "
+                        "Если информации нет в документации, используй Git контекст (ветка, измененные файлы). "
+                        "Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                        "Если вопрос касается кода, можешь использовать MCP инструменты для чтения файлов."
+                    )
+                    
+                    # Inject system prompt if not already present
+                    system_messages = [m for m in messages if m.get("role") == "system"]
+                    if not system_messages:
+                        messages.insert(0, {"role": "system", "content": dev_assistant_system_prompt})
+                    else:
+                        # Append to existing system message
+                        existing_system = system_messages[0].get("content", "")
+                        messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
+    
     # RAG retrieval (if enabled)
     if settings.rag_enabled:
         # Extract latest user message for retrieval query
@@ -326,14 +394,17 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
         if user_messages:
             query = user_messages[-1].get("content", "")
             if query and query.strip():
-                logger.debug(
-                    "RAG retrieval starting query_len=%d top_k=%d",
+                # For /help commands, use higher top_k to get more relevant results
+                top_k = settings.rag_top_k * 2 if is_help_command else settings.rag_top_k
+                logger.info(
+                    "RAG retrieval starting query_len=%d top_k=%d help_mode=%s",
                     len(query),
-                    settings.rag_top_k,
+                    top_k,
+                    is_help_command,
                 )
                 chunks = await retrieve_chunks(
                     query=query,
-                    top_k=settings.rag_top_k,
+                    top_k=top_k,
                     base_url=settings.chunkenizer_api_url,
                 )
                 if chunks:
@@ -373,6 +444,9 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
                     # Build context from filtered/reranked chunks
                     context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
                     if context:
+                        # Add git context if available (for developer assistant mode)
+                        if git_context_str:
+                            context = f"{git_context_str}\n\n{context}"
                         messages = inject_rag_context(messages, context)
                         
                         # Build RAG metadata for UI
@@ -470,6 +544,86 @@ async def stream_chatgpt(payload: ChatRequest):
 
     base_messages = _prepare_messages(payload)
     
+    # Developer assistant mode: detect project questions and /help command
+    is_help_command = False
+    is_project_related = False
+    git_context_str = ""
+    dev_assistant_system_prompt = None
+    
+    if settings.dev_assistant_mode:
+        user_messages = [m for m in base_messages if m.get("role") == "user"]
+        if user_messages:
+            user_query = user_messages[-1].get("content", "")
+            if user_query and user_query.strip():
+                # Check for /help command
+                if user_query.strip().lower().startswith("/help"):
+                    is_help_command = True
+                    original_query = user_query
+                    user_query = extract_help_query(user_query)
+                    logger.info(f"/help command detected (stream): '{original_query}' -> '{user_query}'")
+                    # Update the user message with extracted query for RAG search
+                    base_messages[-1]["content"] = user_query
+                    is_project_related = True
+                    # For /help, we want to search in RAG with the extracted question
+                    # The query will be used for RAG retrieval below
+                else:
+                    # Check if question is about the project
+                    is_project_related = is_project_question(user_query)
+                
+                # If project-related, get git context and set system prompt
+                if is_project_related:
+                    # Get MCP manager for git context (always try builtin manager for git server)
+                    try:
+                        # Always try to get builtin MCP manager (includes git server)
+                        mcp_mgr = await ensure_mcp_manager(
+                            mcp_config_path=(
+                                payload.mcp_config_path or settings.mcp_config_path or None
+                            ),
+                            workspace_root=Path(payload.workspace_root or settings.workspace_root),
+                        )
+                        
+                        if mcp_mgr:
+                            git_context = await get_git_context(mcp_mgr, Path(payload.workspace_root or settings.workspace_root))
+                            if git_context:
+                                git_context_str = format_git_context(git_context)
+                                logger.debug(f"Git context retrieved (stream): branch={git_context.get('branch')}")
+                    except Exception as e:
+                        logger.warning(f"Failed to get git context for developer assistant (stream): {e}", exc_info=True)
+                        # Continue without git context - not critical
+                    
+                    # Set developer assistant system prompt
+                    if is_help_command:
+                        # Enhanced prompt for /help command - focus on code search
+                        dev_assistant_system_prompt = (
+                            "Ты ассистент разработчика для этого проекта. "
+                            "Пользователь задал вопрос через команду /help. "
+                            "Используй предоставленный контекст из RAG для поиска релевантных классов, функций, моделей и кода. "
+                            "Найди конкретные файлы, классы, функции и их реализации, которые относятся к вопросу. "
+                            "Укажи точные пути к файлам, имена классов и функций. "
+                            "Если в контексте есть примеры кода, включи их в ответ. "
+                            "Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                            "Если нужно больше информации, можешь использовать MCP инструменты для чтения файлов."
+                        )
+                    else:
+                        # Standard prompt for automatic project detection
+                        dev_assistant_system_prompt = (
+                            "Ты ассистент разработчика для этого проекта. "
+                            "Используй предоставленную документацию и Git контекст для ответов. "
+                            "Отвечай на основе документации проекта. "
+                            "Если информации нет в документации, используй Git контекст (ветка, измененные файлы). "
+                            "Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                            "Если вопрос касается кода, можешь использовать MCP инструменты для чтения файлов."
+                        )
+                    
+                    # Inject system prompt if not already present
+                    system_messages = [m for m in base_messages if m.get("role") == "system"]
+                    if not system_messages:
+                        base_messages.insert(0, {"role": "system", "content": dev_assistant_system_prompt})
+                    else:
+                        # Append to existing system message
+                        existing_system = system_messages[0].get("content", "")
+                        base_messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
+    
     # RAG retrieval (if enabled)
     if settings.rag_enabled:
         # Extract latest user message for retrieval query
@@ -477,14 +631,17 @@ async def stream_chatgpt(payload: ChatRequest):
         if user_messages:
             query = user_messages[-1].get("content", "")
             if query and query.strip():
-                logger.debug(
-                    "RAG retrieval starting (stream) query_len=%d top_k=%d",
+                # For /help commands, use higher top_k to get more relevant results
+                top_k = settings.rag_top_k * 2 if is_help_command else settings.rag_top_k
+                logger.info(
+                    "RAG retrieval starting (stream) query_len=%d top_k=%d help_mode=%s",
                     len(query),
-                    settings.rag_top_k,
+                    top_k,
+                    is_help_command,
                 )
                 chunks = await retrieve_chunks(
                     query=query,
-                    top_k=settings.rag_top_k,
+                    top_k=top_k,
                     base_url=settings.chunkenizer_api_url,
                 )
                 if chunks:
@@ -511,6 +668,9 @@ async def stream_chatgpt(payload: ChatRequest):
                     # Build context from filtered/reranked chunks
                     context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
                     if context:
+                        # Add git context if available (for developer assistant mode)
+                        if git_context_str:
+                            context = f"{git_context_str}\n\n{context}"
                         base_messages = inject_rag_context(base_messages, context)
                         logger.info(
                             "RAG context injected (stream) initial_k=%d filtered_k=%d final_k=%d "

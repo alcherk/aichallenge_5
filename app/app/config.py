@@ -53,6 +53,11 @@ class Settings:
         self.rag_reranker_type: str = os.getenv("RAG_RERANKER_TYPE", "noop").strip().lower()
         rag_compare_mode_str = os.getenv("RAG_COMPARE_MODE", "false").strip().lower()
         self.rag_compare_mode: bool = rag_compare_mode_str in {"1", "true", "yes", "y", "on"}
+        
+        # Developer assistant mode
+        dev_assistant_mode_str = os.getenv("DEV_ASSISTANT_MODE", "true").strip().lower()
+        self.dev_assistant_mode: bool = dev_assistant_mode_str in {"1", "true", "yes", "y", "on"}
+        self.rag_project_docs_collection: str = os.getenv("RAG_PROJECT_DOCS_COLLECTION", "documents").strip()
 
 
 @lru_cache()

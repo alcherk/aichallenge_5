@@ -11,7 +11,7 @@ async def retrieve_chunks(
     query: str,
     top_k: int = 5,
     base_url: str = "http://localhost:8000",
-    timeout: float = 10.0,
+    timeout: float = 5.0,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve relevant document chunks from Chunkenizer API.
@@ -75,6 +75,15 @@ async def retrieve_chunks(
             timeout,
         )
         return []
+    except httpx.ConnectError as e:
+        logger.warning(
+            "Chunkenizer not available (connection failed) query_len=%d base_url=%s error=%s. "
+            "RAG will continue without document context. Start Chunkenizer to enable RAG features.",
+            len(query),
+            base_url,
+            str(e),
+        )
+        return []
     except httpx.HTTPStatusError as e:
         logger.error(
             "Chunkenizer API error query_len=%d base_url=%s status=%d response=%s",
@@ -85,8 +94,8 @@ async def retrieve_chunks(
         )
         return []
     except Exception as e:
-        logger.exception(
-            "Unexpected error retrieving chunks query_len=%d base_url=%s error=%s",
+        logger.warning(
+            "Unexpected error retrieving chunks query_len=%d base_url=%s error=%s. RAG will continue without document context.",
             len(query),
             base_url,
             str(e),

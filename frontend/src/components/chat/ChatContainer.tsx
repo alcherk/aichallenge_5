@@ -52,34 +52,43 @@ export const ChatContainer: React.FC = () => {
         });
 
         const assistantText = data?.data?.choices?.[0]?.message?.content || '';
-        if (data.success && assistantText) {
-          updateMetrics(data);
+        if (data.success) {
+          if (assistantText) {
+            updateMetrics(data);
 
-          const messageIndex = messages.length + 1; // +1 for the new assistant message
-          messageResponses.set(messageIndex, data);
+            const messageIndex = messages.length + 1; // +1 for the new assistant message
+            messageResponses.set(messageIndex, data);
 
-          // Simulated streaming: progressively reveal the final text so it doesn't pop in one-shot.
-          let i = 0;
-          const chunkSize = 24; // chars per tick
-          const intervalMs = 25;
-          streamTimerRef.current = window.setInterval(() => {
-            i = Math.min(assistantText.length, i + chunkSize);
-            setStreamingContent(assistantText.slice(0, i));
-            if (i >= assistantText.length) {
-              if (streamTimerRef.current) {
-                window.clearInterval(streamTimerRef.current);
-                streamTimerRef.current = null;
+            // Simulated streaming: progressively reveal the final text so it doesn't pop in one-shot.
+            let i = 0;
+            const chunkSize = 24; // chars per tick
+            const intervalMs = 25;
+            streamTimerRef.current = window.setInterval(() => {
+              i = Math.min(assistantText.length, i + chunkSize);
+              setStreamingContent(assistantText.slice(0, i));
+              if (i >= assistantText.length) {
+                if (streamTimerRef.current) {
+                  window.clearInterval(streamTimerRef.current);
+                  streamTimerRef.current = null;
+                }
+                addMessage({ role: 'assistant', content: assistantText });
+                setStreamingContent('');
+                setIsStreaming(false);
               }
-              addMessage({ role: 'assistant', content: assistantText });
-              setStreamingContent('');
-              setIsStreaming(false);
-            }
-          }, intervalMs);
-          return;
+            }, intervalMs);
+            return;
+          } else {
+            // Success but no content - might be a valid empty response
+            const errorMessage: Message = {
+              role: 'assistant',
+              content: `No response content received. ${data?.error?.detail || 'Please try again.'}`,
+            };
+            addMessage(errorMessage);
+          }
         } else {
           const errorMessage: Message = {
             role: 'assistant',
-            content: `Error: ${data?.error?.detail || 'Request failed'}`,
+            content: `Error: ${data?.error?.detail || data?.message || 'Request failed'}`,
           };
           addMessage(errorMessage);
         }

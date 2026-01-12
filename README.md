@@ -35,20 +35,34 @@ Modern FastAPI-based proxy service with React + TypeScript frontend. Forwards re
 
 ### Development (Dual Server)
 
-**Terminal 1 - Backend:**
+**Terminal 1 - Chunkenizer (for RAG):**
+```bash
+cd ../Chunkenizer
+docker-compose up -d
+# Verify it's running:
+curl http://localhost:8000/api/health
+# Should return: {"status":"ok"}
+```
+
+**Terminal 2 - Backend:**
 ```bash
 source .venv/bin/activate
 export OPENAI_API_KEY="your-key-here"
 uvicorn app.app.main:app --reload --port 8333
+# Verify it's running:
+curl http://localhost:8333/health
+# Should return: {"status":"ok"}
 ```
 
-**Terminal 2 - Frontend:**
+**Terminal 3 - Frontend (optional, for dev with hot reload):**
 ```bash
 cd frontend
 npm install
 npm run dev
 # Opens at http://localhost:5173
 ```
+
+**Note:** If Chunkenizer is not running, RAG will be disabled. Make sure Chunkenizer is running on port 8000 before testing chat with RAG features.
 
 ### Production (Docker)
 
@@ -123,6 +137,8 @@ This project supports **RAG** to enhance chat responses with retrieved document 
 
 ### Chunkenizer Setup
 
+**Chunkenizer is required for RAG functionality.** Make sure it's running before testing chat.
+
 1. **Start Chunkenizer** (if not already running):
    ```bash
    cd ../Chunkenizer
@@ -130,7 +146,20 @@ This project supports **RAG** to enhance chat responses with retrieved document 
    # Or run locally: python -m app.main
    ```
 
-2. **Upload Documents**:
+2. **Check if Chunkenizer is running**:
+   ```bash
+   # Quick check script (Python)
+   python scripts/check_chunkenizer.py
+   
+   # Or bash script
+   ./scripts/check_chunkenizer.sh
+   
+   # Or manually:
+   curl http://localhost:8000/api/health
+   # Should return: {"status":"ok"}
+   ```
+
+3. **Upload Documents** (for project documentation):
    ```bash
    # Via API
    curl -X POST http://localhost:8000/documents \
@@ -138,12 +167,17 @@ This project supports **RAG** to enhance chat responses with retrieved document 
      -F "metadata_json={\"source\": \"docs\"}"
    
    # Or use the web UI at http://localhost:8000
+   
+   # Or use the project docs ingestion script:
+   python scripts/ingest_project_docs.py
    ```
 
-3. **Verify Chunkenizer is accessible**:
+4. **Verify Chunkenizer is accessible**:
    ```bash
    curl http://localhost:8000/api/health
    ```
+
+**Note:** If Chunkenizer is not running, the chat service will still work but RAG features will be disabled. Check the backend logs to see if RAG retrieval is failing.
 
 ### RAG Configuration
 
@@ -151,6 +185,102 @@ This project supports **RAG** to enhance chat responses with retrieved document 
 - `RAG_TOP_K`: Number of chunks to retrieve per query (default: `5`)
 - `RAG_MAX_CONTEXT_CHARS`: Maximum context size before truncation (default: `8000`)
 - `CHUNKENIZER_API_URL`: Chunkenizer API base URL (default: `http://localhost:8000`)
+
+### Developer Assistant Mode
+
+The service includes a developer assistant mode that automatically uses RAG with project documentation and Git context for questions about the project.
+
+**Features:**
+- Automatic detection of project-related questions
+- `/help` command for explicit developer assistance
+- Git context integration (current branch, modified files)
+- Project documentation retrieval via RAG
+
+**Configuration:**
+- `DEV_ASSISTANT_MODE`: Enable/disable developer assistant mode (default: `true`)
+- `RAG_PROJECT_DOCS_COLLECTION`: Chunkenizer collection name for project docs (default: `documents`)
+
+**Usage:**
+
+1. **Ingest project documentation (manual):**
+   ```bash
+   python scripts/ingest_project_docs.py --chunkenizer-url http://localhost:8000
+   ```
+
+2. **Auto-index project code and documentation:**
+   ```bash
+   # First run - full scan of all files
+   python scripts/auto_index_project.py --full-scan --repo-path .
+   
+   # Incremental scan - only changed files
+   python scripts/auto_index_project.py --repo-path .
+   
+   # Daemon mode - continuous monitoring (every 5 minutes)
+   python scripts/auto_index_project.py --daemon --interval 300
+   
+   # Cron job (every 15 minutes)
+   # Add to crontab: */15 * * * * cd /path/to/project && python scripts/auto_index_project.py
+   ```
+
+3. **Ask questions about the project:**
+   - Use `/help <question>` for explicit developer assistance
+   - Or ask naturally: "How does RAG work in this project?", "What is the API structure?"
+   - The assistant will automatically use project documentation and Git context
+
+**Example:**
+```
+User: /help How do I configure RAG?
+Assistant: [Uses project docs + Git context to answer]
+```
+
+The assistant will:
+- Retrieve relevant documentation chunks
+- Include current Git branch and modified files
+- Provide code examples and citations
+
+### Auto-Indexing Project Code
+
+The project includes an automatic indexing script that monitors your repository and indexes code and documentation files into Chunkenizer for RAG.
+
+**Features:**
+- Automatic detection of changed files via Git
+- Full scan mode for initial indexing
+- Incremental updates (only changed files)
+- Daemon mode for continuous monitoring
+- State management (tracks indexed files and changes)
+
+**File Types Indexed:**
+- Code: `.py`, `.ts`, `.tsx`, `.js`, `.jsx`, `.json`, `.yaml`, `.yml`
+- Documentation: `.md`, `.txt`, `.rst`
+
+**Configuration:**
+- Automatically respects `.gitignore`
+- Excludes: `node_modules`, `__pycache__`, `dist`, `build`, etc.
+- Maximum file size: 1MB
+
+**Usage Examples:**
+
+```bash
+# First time - index all files
+python scripts/auto_index_project.py --full-scan
+
+# Regular run - only index changed files
+python scripts/auto_index_project.py
+
+# Continuous monitoring (daemon mode)
+python scripts/auto_index_project.py --daemon --interval 300
+
+# Custom repository path
+python scripts/auto_index_project.py --repo-path /path/to/repo --chunkenizer-url http://localhost:8000
+```
+
+**State File:**
+The script creates `.rag_index_state.json` in the repository root to track:
+- Last processed commit hash
+- Indexed files and their hashes
+- Last index time
+
+This file is automatically added to `.gitignore`.
 
 #### Second-Stage Filtering and Reranking
 

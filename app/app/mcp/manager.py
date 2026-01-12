@@ -339,7 +339,7 @@ async def ensure_mcp_manager(*, mcp_config_path: Optional[str], workspace_root: 
             if cfg is None or not cfg.servers:
                 return None
         else:
-            # Built-in default: filesystem + fetch stdio servers.
+            # Built-in default: filesystem + fetch + git stdio servers.
             py = sys.executable
             cfg = MCPConfig(
                 servers=[
@@ -360,6 +360,18 @@ async def ensure_mcp_manager(*, mcp_config_path: Optional[str], workspace_root: 
                         transport="stdio",
                         kind="fetch",
                         command=[py, "-m", "app.app.mcp.servers.fetch_server"],
+                    ),
+                    MCPServerConfig(
+                        name="builtin_git",
+                        transport="stdio",
+                        kind="generic",
+                        command=[
+                            py,
+                            "-m",
+                            "app.app.mcp.servers.git_server",
+                            "--root",
+                            str(workspace_root),
+                        ],
                     ),
                 ]
             )
