@@ -102,6 +102,7 @@ docker compose up -d --build
 - `APP_PORT` - Default: `8333`
 - `MCP_CONFIG_PATH` - Path to MCP server config JSON (optional; disabled by default)
 - `WORKSPACE_ROOT` - Workspace root for filesystem-like MCP tools (default: repo root)
+- `GIT_MCP_MAX_DIFF_SIZE` - Maximum size for git diff responses in Git MCP server (default: `50K`). Supports suffixes: `K` (KB), `M` (MB). Examples: `100K`, `500K`, `1M`. Maximum: 10MB. Use this to handle larger diffs in `/review` command.
 - `RAG_ENABLED` - Enable RAG (Retrieval-Augmented Generation) - Default: `true`
 - `RAG_TOP_K` - Number of document chunks to retrieve - Default: `5`
 - `RAG_MAX_CONTEXT_CHARS` - Maximum context size in characters - Default: `8000`
@@ -237,6 +238,135 @@ The assistant will:
 - Retrieve relevant documentation chunks
 - Include current Git branch and modified files
 - Provide code examples and citations
+
+### Developer Commands
+
+The service provides two special commands for developer assistance: `/help` and `/review`.
+
+#### `/help` Command
+
+The `/help` command provides developer assistance by searching project documentation and code using RAG.
+
+**Usage:**
+```
+/help <your question>
+```
+
+**Examples:**
+```
+/help how is chat implemented
+/help what classes handle RAG
+/help where is the API endpoint defined
+/help how to configure MCP servers
+```
+
+**Features:**
+- Searches project documentation and code using RAG
+- Finds specific classes, functions, models, and files
+- Provides exact file paths and code examples
+- Uses higher `top_k` for RAG retrieval (doubled compared to regular queries)
+- Includes Git context (current branch, modified files)
+- Focuses on code search and implementation details
+
+**How it works:**
+1. Extracts your question from the `/help` command
+2. Searches RAG for relevant code and documentation
+3. Retrieves Git context (branch, modified files)
+4. Provides detailed answer with file paths, class/function names, and code examples
+5. Includes citations in format `[doc_name:doc_id:chunk_index]`
+
+**Example Response:**
+```
+The chat implementation is in `app/app/services/chatgpt_client.py`:
+
+- `call_chatgpt()` function handles non-streaming requests
+- `stream_chatgpt()` function handles streaming requests
+- RAG integration happens in `call_chatgpt()` at line 491
+
+[app/app/services/chatgpt_client.py:491-520]
+```
+
+#### `/review` Command
+
+The `/review` command acts as a Staff Engineer, reviewing uncommitted changes or specific commits in the Git repository.
+
+**Usage:**
+```
+/review                    # Review uncommitted changes
+/review commit            # Review the last commit (HEAD)
+/review HEAD              # Review the last commit
+/review HEAD~1            # Review the previous commit
+/review <commit-hash>     # Review a specific commit
+```
+
+**Features:**
+- Comprehensive code review covering:
+  - **Architecture**: Design patterns, module structure, SOLID/DRY/KISS principles
+  - **Code Style**: Conventions, naming, comments, documentation
+  - **Bugs**: Error handling, edge cases, race conditions, null handling
+  - **Performance**: Algorithm optimization, N+1 queries, inefficient operations
+  - **Security**: SQL injection, XSS, input validation, secrets in code
+- Uses RAG to check against project documentation and style guides
+- Includes Git context (branch, commit info)
+- Shows changed files and full diff
+- **Only reports real issues** - categories without problems are omitted
+- Provides specific code locations with file paths and line numbers
+- Shows problematic code fragments from diff
+- Suggests fixes with code examples
+
+**Review Format:**
+For each issue found, the review includes:
+```
+📁 file.py:123
+```diff
+- old_code
++ new_code
+```
+❌ Проблема: [description]
+✅ Исправление: [suggestion]
+```
+
+**Configuration:**
+- `GIT_MCP_MAX_DIFF_SIZE`: Control maximum diff size (default: `50K`). For larger diffs:
+  ```bash
+  export GIT_MCP_MAX_DIFF_SIZE=500K  # 500KB
+  export GIT_MCP_MAX_DIFF_SIZE=1M    # 1MB
+  ```
+
+**Example:**
+```
+User: /review
+
+Assistant: 
+## Code Review
+
+### 🐛 БАГИ
+
+📁 app/app/mcp/servers/git_server.py:441
+```diff
+- sys.stdout.write(response_json + "\n")
++ sys.stdout.buffer.write(response_bytes)
+```
+❌ Проблема: Прямая запись в stdout может вызвать проблемы с кодировкой для больших ответов
+✅ Исправление: Использовать sys.stdout.buffer.write() для бинарных данных
+
+### ⚠️ БЕЗОПАСНОСТЬ
+
+📁 app/app/services/chatgpt_client.py:234
+```diff
+- api_key = os.getenv("OPENAI_API_KEY")
++ api_key = settings.openai_api_key
+```
+❌ Проблема: Прямой доступ к переменным окружения вместо настроек
+✅ Исправление: Использовать централизованные настройки из Settings
+```
+
+**Requirements:**
+- Git repository must be initialized
+- Chunkenizer must be running (for RAG-based review)
+- Project documentation should be indexed (see [Auto-Indexing Project Code](#auto-indexing-project-code))
+
+**Note:** If there are no issues found, the review will simply state that the code looks good.
 
 ### Auto-Indexing Project Code
 

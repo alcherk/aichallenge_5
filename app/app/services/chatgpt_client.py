@@ -16,8 +16,9 @@ from ..rag.context_builder import build_context_block
 from ..rag.prompt_injector import inject_rag_context
 from ..rag.filter import filter_by_similarity
 from ..rag.reranker import get_reranker
-from ..rag.project_detector import is_project_question, extract_help_query
-from ..rag.git_context import get_git_context, format_git_context
+from ..rag.project_detector import is_project_question, extract_help_query, extract_review_query, build_review_rag_queries
+from ..rag.git_context import get_git_context, format_git_context, get_review_diff
+from ..rag.context_builder import build_review_context
 
 logger = logging.getLogger("app.openai")
 
@@ -323,17 +324,70 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
     
     # Developer assistant mode: detect project questions and /help command
     is_help_command = False
+    is_review_command = False
+    review_commit_hash = None
     is_project_related = False
     git_context_str = ""
+    git_context = None
     dev_assistant_system_prompt = None
+    review_diff_data = None
     
     if settings.dev_assistant_mode:
         user_messages = [m for m in messages if m.get("role") == "user"]
         if user_messages:
             user_query = user_messages[-1].get("content", "")
             if user_query and user_query.strip():
+                # Check for /review command
+                if user_query.strip().lower().startswith("/review"):
+                    is_review_command = True
+                    original_query = user_query
+                    _, review_commit_hash = extract_review_query(user_query)
+                    logger.info(f"/review command detected: '{original_query}' -> commit={review_commit_hash}")
+                    # For /review, we'll get diff and build RAG queries from it
+                    is_project_related = True
+                    
+                    # Get MCP manager for git diff
+                    logger.info(f"Review command: getting git diff (commit={review_commit_hash or 'uncommitted'}, workspace={payload.workspace_root or settings.workspace_root})")
+                    try:
+                        mcp_mgr = await ensure_mcp_manager(
+                            mcp_config_path=(
+                                payload.mcp_config_path or settings.mcp_config_path or None
+                            ),
+                            workspace_root=Path(payload.workspace_root or settings.workspace_root),
+                        )
+                        
+                        if mcp_mgr:
+                            logger.info(f"MCP manager obtained for review: {type(mcp_mgr).__name__}")
+                            review_diff_data = await get_review_diff(
+                                mcp_mgr,
+                                Path(payload.workspace_root or settings.workspace_root),
+                                review_commit_hash
+                            )
+                            if review_diff_data:
+                                if not review_diff_data.get("has_changes", False):
+                                    # No changes to review - set a clear message that will be returned
+                                    messages[-1]["content"] = "I checked your repository, but there are no uncommitted changes to review. All files are up to date. If you want to review a specific commit, use `/review commit` or `/review <commit-hash>`."
+                                    logger.info(f"Review command: no changes found (commit={review_commit_hash or 'uncommitted'})")
+                                    # Mark that we've handled this case so RAG doesn't try to process it
+                                    review_diff_data = None
+                                else:
+                                    changed_files = review_diff_data.get('changed_files', [])
+                                    diff_length = len(review_diff_data.get('diff', ''))
+                                    logger.info(f"Review diff retrieved successfully: {len(changed_files)} files changed, diff_length={diff_length} chars, commit={review_commit_hash or 'uncommitted'}")
+                                    # Update message to indicate we're ready for review
+                                    messages[-1]["content"] = "Please review the following code changes."
+                            else:
+                                logger.warning(f"Failed to retrieve review diff: review_diff_data is None (commit={review_commit_hash or 'uncommitted'})")
+                                # Set helpful error message but keep it as a review request
+                                messages[-1]["content"] = "I couldn't retrieve the git diff for review. Please make sure you're in a git repository and have uncommitted changes, or specify a commit hash like `/review commit` or `/review HEAD~1`."
+                        else:
+                            logger.warning("MCP manager is None - cannot retrieve git diff")
+                    except Exception as e:
+                        logger.error(f"Failed to get review diff: {e}", exc_info=True)
+                        # Continue - will handle error in review flow
+                
                 # Check for /help command
-                if user_query.strip().lower().startswith("/help"):
+                elif user_query.strip().lower().startswith("/help"):
                     is_help_command = True
                     original_query = user_query
                     user_query = extract_help_query(user_query)
@@ -347,8 +401,9 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
                     # Check if question is about the project
                     is_project_related = is_project_question(user_query)
                 
+                # Always set system prompt for /review and /help commands, even if not project-related
                 # If project-related, get git context and set system prompt
-                if is_project_related:
+                if is_review_command or is_help_command or is_project_related:
                     # Get MCP manager for git context (always try builtin manager for git server)
                     try:
                         # Always try to get builtin MCP manager (includes git server)
@@ -369,123 +424,253 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
                         # Continue without git context - not critical
                     
                     # Set developer assistant system prompt
-                    dev_assistant_system_prompt = (
-                        "Ты ассистент разработчика для этого проекта. "
-                        "Используй предоставленную документацию и Git контекст для ответов. "
-                        "Отвечай на основе документации проекта. "
-                        "Если информации нет в документации, используй Git контекст (ветка, измененные файлы). "
-                        "Цитируй источники как [doc_name:doc_id:chunk_index]. "
-                        "Если вопрос касается кода, можешь использовать MCP инструменты для чтения файлов."
-                    )
+                    if is_review_command:
+                        logger.info("Setting Staff Engineer system prompt for /review command")
+                        # Staff engineer system prompt for code review
+                        dev_assistant_system_prompt = (
+                            "Ты Staff Engineer, проводящий code review. "
+                            "Твоя задача - найти РЕАЛЬНЫЕ проблемы в коде и указать КОНКРЕТНЫЕ места с примерами из diff.\n\n"
+                            "ВАЖНЫЕ ПРАВИЛА:\n"
+                            "1. Указывай ТОЛЬКО те категории, где есть РЕАЛЬНЫЕ проблемы\n"
+                            "2. Для каждой проблемы указывай:\n"
+                            "   - Точное место в коде (файл, строка, функция)\n"
+                            "   - Фрагмент кода из diff с проблемой\n"
+                            "   - Конкретное объяснение проблемы\n"
+                            "   - Предложение исправления с примером кода\n"
+                            "3. Если по категории нет проблем - НЕ упоминай её вообще\n"
+                            "4. Используй формат diff для показа проблемных мест\n\n"
+                            "КАТЕГОРИИ ДЛЯ ПРОВЕРКИ (указывай только если есть проблемы):\n\n"
+                            "АРХИТЕКТУРА:\n"
+                            "- Нарушение паттернов проекта\n"
+                            "- Неправильная структура модулей\n"
+                            "- Нарушение SOLID/DRY/KISS\n"
+                            "- Проблемы интеграции\n\n"
+                            "СТИЛЬ КОДА:\n"
+                            "- Несоответствие конвенциям\n"
+                            "- Плохое именование\n"
+                            "- Отсутствие/неправильные комментарии\n\n"
+                            "БАГИ:\n"
+                            "- Отсутствие обработки ошибок\n"
+                            "- Edge cases не обработаны\n"
+                            "- Race conditions\n"
+                            "- Null/undefined проблемы\n\n"
+                            "ПРОИЗВОДИТЕЛЬНОСТЬ:\n"
+                            "- Неэффективные алгоритмы\n"
+                            "- N+1 queries\n"
+                            "- Лишние операции\n\n"
+                            "БЕЗОПАСНОСТЬ:\n"
+                            "- SQL injection, XSS риски\n"
+                            "- Отсутствие валидации\n"
+                            "- Секреты в коде\n\n"
+                            "ФОРМАТ ОТВЕТА:\n"
+                            "Для каждой проблемы используй такой формат:\n"
+                            "```\n"
+                            "📁 файл.py:123\n"
+                            "```diff\n"
+                            "- старый_код\n"
+                            "+ новый_код\n"
+                            "```\n"
+                            "❌ Проблема: [описание]\n"
+                            "✅ Исправление: [предложение]\n\n"
+                            "Используй предоставленный контекст из RAG для проверки соответствия "
+                            "архитектуре и стилю проекта. Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                            "Если проблем нет - скажи кратко, что код выглядит хорошо."
+                        )
+                    elif is_help_command:
+                        # Enhanced prompt for /help command - focus on code search
+                        dev_assistant_system_prompt = (
+                            "Ты ассистент разработчика для этого проекта. "
+                            "Пользователь задал вопрос через команду /help. "
+                            "Используй предоставленный контекст из RAG для поиска релевантных классов, функций, моделей и кода. "
+                            "Найди конкретные файлы, классы, функции и их реализации, которые относятся к вопросу. "
+                            "Укажи точные пути к файлам, имена классов и функций. "
+                            "Если в контексте есть примеры кода, включи их в ответ. "
+                            "Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                            "Если нужно больше информации, можешь использовать MCP инструменты для чтения файлов."
+                        )
+                    else:
+                        # Standard prompt for automatic project detection
+                        dev_assistant_system_prompt = (
+                            "Ты ассистент разработчика для этого проекта. "
+                            "Используй предоставленную документацию и Git контекст для ответов. "
+                            "Отвечай на основе документации проекта. "
+                            "Если информации нет в документации, используй Git контекст (ветка, измененные файлы). "
+                            "Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                            "Если вопрос касается кода, можешь использовать MCP инструменты для чтения файлов."
+                        )
                     
                     # Inject system prompt if not already present
                     system_messages = [m for m in messages if m.get("role") == "system"]
                     if not system_messages:
                         messages.insert(0, {"role": "system", "content": dev_assistant_system_prompt})
+                        logger.info(f"System prompt injected for {'/review' if is_review_command else '/help' if is_help_command else 'project question'}")
                     else:
-                        # Append to existing system message
-                        existing_system = system_messages[0].get("content", "")
-                        messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
+                        # Replace existing system message for commands to ensure they take precedence
+                        if is_review_command or is_help_command:
+                            messages[0]["content"] = dev_assistant_system_prompt
+                            logger.info(f"System prompt replaced for {'/review' if is_review_command else '/help'}")
+                        else:
+                            # Append to existing system message for project questions
+                            existing_system = system_messages[0].get("content", "")
+                            messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
     
     # RAG retrieval (if enabled)
     if settings.rag_enabled:
-        # Extract latest user message for retrieval query
-        user_messages = [m for m in messages if m.get("role") == "user"]
-        if user_messages:
-            query = user_messages[-1].get("content", "")
-            if query and query.strip():
-                # For /help commands, use higher top_k to get more relevant results
-                top_k = settings.rag_top_k * 2 if is_help_command else settings.rag_top_k
-                logger.info(
-                    "RAG retrieval starting query_len=%d top_k=%d help_mode=%s",
-                    len(query),
-                    top_k,
-                    is_help_command,
-                )
-                chunks = await retrieve_chunks(
-                    query=query,
-                    top_k=top_k,
+        # Special handling for /review command
+        if is_review_command and review_diff_data and review_diff_data.get("has_changes", False):
+            # Build RAG queries from diff and changed files
+            changed_files = review_diff_data.get("changed_files", [])
+            diff = review_diff_data.get("diff", "")
+            rag_queries = build_review_rag_queries(changed_files, diff)
+            
+            # Retrieve chunks for each query and merge
+            all_chunks = []
+            seen_chunk_ids = set()
+            
+            for rag_query in rag_queries:
+                # Use higher top_k for review (15-20 chunks per query)
+                review_top_k = max(15, settings.rag_top_k * 3)
+                logger.debug(f"Review RAG query: '{rag_query[:50]}...' top_k={review_top_k}")
+                
+                query_chunks = await retrieve_chunks(
+                    query=rag_query,
+                    top_k=review_top_k,
                     base_url=settings.chunkenizer_api_url,
                 )
-                if chunks:
-                    # Store baseline messages for comparison mode (before filtering/reranking)
-                    if settings.rag_compare_mode:
-                        baseline_messages = [m.copy() for m in messages]
-                        baseline_context = build_context_block(chunks, settings.rag_max_context_chars)
-                        if baseline_context:
-                            baseline_messages = inject_rag_context(baseline_messages, baseline_context)
-                        logger.debug("RAG comparison mode: baseline messages prepared chunks=%d", len(chunks))
-                    
-                    # Collect initial chunk scores for metadata
-                    initial_scores = [chunk.get("score", 0.0) for chunk in chunks]
-                    
-                    # Second-stage filtering by similarity threshold
-                    filtered_chunks, filter_metadata = filter_by_similarity(
-                        chunks,
-                        threshold=settings.rag_min_similarity,
-                        min_chunks=settings.rag_min_chunks,
-                    )
-                    
-                    # Collect filtered chunk scores
-                    filtered_scores = [chunk.get("score", 0.0) for chunk in filtered_chunks]
-                    
-                    # Reranking (if enabled)
-                    reranker_applied = False
-                    if settings.rag_reranker_enabled:
-                        reranker = get_reranker(settings.rag_reranker_type)
-                        filtered_chunks = await reranker.rerank(query, filtered_chunks)
-                        reranker_applied = True
-                        logger.debug(
-                            "RAG reranker applied type=%s chunks=%d",
-                            settings.rag_reranker_type,
-                            len(filtered_chunks),
-                        )
-                    
-                    # Build context from filtered/reranked chunks
-                    context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
-                    if context:
-                        # Add git context if available (for developer assistant mode)
-                        if git_context_str:
-                            context = f"{git_context_str}\n\n{context}"
-                        messages = inject_rag_context(messages, context)
-                        
-                        # Build RAG metadata for UI
-                        rag_metadata = {
-                            "enabled": True,
-                            "initial_chunks": len(chunks),
-                            "filtered_chunks": filter_metadata["filtered_count"],
-                            "final_chunks": len(filtered_chunks),
-                            "threshold": settings.rag_min_similarity,
-                            "fallback_triggered": filter_metadata["fallback_triggered"],
-                            "reranker_enabled": settings.rag_reranker_enabled,
-                            "reranker_type": settings.rag_reranker_type if settings.rag_reranker_enabled else None,
-                            "scores_range": filter_metadata["scores_range"],
-                            "initial_scores": initial_scores,
-                            "filtered_scores": filtered_scores,
-                            "context_size": len(context),
-                            "compare_mode": settings.rag_compare_mode,
-                        }
-                        
-                        logger.info(
-                            "RAG context injected initial_k=%d filtered_k=%d final_k=%d "
-                            "threshold=%.3f fallback=%s reranker=%s context_size=%d",
-                            len(chunks),
-                            filter_metadata["filtered_count"],
-                            len(filtered_chunks),
-                            settings.rag_min_similarity,
-                            filter_metadata["fallback_triggered"],
-                            settings.rag_reranker_type if settings.rag_reranker_enabled else "none",
-                            len(context),
-                        )
-                    else:
-                        logger.debug("RAG context block empty after formatting")
-                else:
-                    rag_metadata = {"enabled": True, "initial_chunks": 0, "error": "No chunks retrieved"}
-                    logger.debug("RAG retrieval returned no chunks")
+                
+                # Deduplicate chunks by document_id + chunk_index
+                for chunk in query_chunks:
+                    chunk_id = f"{chunk.get('document_id', '')}:{chunk.get('chunk_index', 0)}"
+                    if chunk_id not in seen_chunk_ids:
+                        seen_chunk_ids.add(chunk_id)
+                        all_chunks.append(chunk)
+            
+            logger.info(f"Review RAG: retrieved {len(all_chunks)} unique chunks from {len(rag_queries)} queries")
+            
+            # Build review context with diff + RAG chunks (even if no RAG chunks, we still have the diff)
+            review_context = build_review_context(
+                diff=diff,
+                changed_files=changed_files,
+                rag_chunks=all_chunks if all_chunks else [],
+                git_context=git_context,
+                commit_hash=review_commit_hash,
+                max_chars=settings.rag_max_context_chars * 2,  # More space for review
+            )
+            
+            if review_context:
+                # Update user message with review request
+                messages[-1]["content"] = "Please review the following code changes:\n\n" + review_context
+                logger.info(f"Review context built and injected into messages (diff_len={len(diff)}, rag_chunks={len(all_chunks)})")
             else:
-                logger.debug("RAG skipped: empty user query")
+                logger.warning("Review context is empty - this should not happen if diff exists")
+                # Fallback: at least include the diff
+                if diff:
+                    messages[-1]["content"] = "Please review the following code changes:\n\nCODE DIFF:\n\n" + diff
+                    logger.info("Using diff-only fallback for review")
+        elif is_review_command:
+            # review_diff_data is None or has_changes is False
+            # This case should have been handled earlier - message content already set to error/info
+            # Don't run standard RAG on the error message
+            logger.info(f"Review command completed (no diff to process): review_diff_data={review_diff_data is not None}, message_content_len={len(messages[-1].get('content', '')) if messages else 0}")
         else:
-            logger.debug("RAG skipped: no user messages found")
+            # Standard RAG retrieval for /help and other queries
+            user_messages = [m for m in messages if m.get("role") == "user"]
+            if user_messages:
+                query = user_messages[-1].get("content", "")
+                if query and query.strip():
+                    # For /help commands, use higher top_k to get more relevant results
+                    top_k = settings.rag_top_k * 2 if is_help_command else settings.rag_top_k
+                    logger.info(
+                        "RAG retrieval starting query_len=%d top_k=%d help_mode=%s",
+                        len(query),
+                        top_k,
+                        is_help_command,
+                    )
+                    chunks = await retrieve_chunks(
+                        query=query,
+                        top_k=top_k,
+                        base_url=settings.chunkenizer_api_url,
+                    )
+                    if chunks:
+                        # Store baseline messages for comparison mode (before filtering/reranking)
+                        if settings.rag_compare_mode:
+                            baseline_messages = [m.copy() for m in messages]
+                            baseline_context = build_context_block(chunks, settings.rag_max_context_chars)
+                            if baseline_context:
+                                baseline_messages = inject_rag_context(baseline_messages, baseline_context)
+                            logger.debug("RAG comparison mode: baseline messages prepared chunks=%d", len(chunks))
+                        
+                        # Collect initial chunk scores for metadata
+                        initial_scores = [chunk.get("score", 0.0) for chunk in chunks]
+                        
+                        # Second-stage filtering by similarity threshold
+                        filtered_chunks, filter_metadata = filter_by_similarity(
+                            chunks,
+                            threshold=settings.rag_min_similarity,
+                            min_chunks=settings.rag_min_chunks,
+                        )
+                        
+                        # Collect filtered chunk scores
+                        filtered_scores = [chunk.get("score", 0.0) for chunk in filtered_chunks]
+                        
+                        # Reranking (if enabled)
+                        reranker_applied = False
+                        if settings.rag_reranker_enabled:
+                            reranker = get_reranker(settings.rag_reranker_type)
+                            filtered_chunks = await reranker.rerank(query, filtered_chunks)
+                            reranker_applied = True
+                            logger.debug(
+                                "RAG reranker applied type=%s chunks=%d",
+                                settings.rag_reranker_type,
+                                len(filtered_chunks),
+                            )
+                        
+                        # Build context from filtered/reranked chunks
+                        context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
+                        if context:
+                            # Add git context if available (for developer assistant mode)
+                            if git_context_str:
+                                context = f"{git_context_str}\n\n{context}"
+                            messages = inject_rag_context(messages, context)
+                            
+                            # Build RAG metadata for UI
+                            rag_metadata = {
+                                "enabled": True,
+                                "initial_chunks": len(chunks),
+                                "filtered_chunks": filter_metadata["filtered_count"],
+                                "final_chunks": len(filtered_chunks),
+                                "threshold": settings.rag_min_similarity,
+                                "fallback_triggered": filter_metadata["fallback_triggered"],
+                                "reranker_enabled": settings.rag_reranker_enabled,
+                                "reranker_type": settings.rag_reranker_type if settings.rag_reranker_enabled else None,
+                                "scores_range": filter_metadata["scores_range"],
+                                "initial_scores": initial_scores,
+                                "filtered_scores": filtered_scores,
+                                "context_size": len(context),
+                                "compare_mode": settings.rag_compare_mode,
+                            }
+                            
+                            logger.info(
+                                "RAG context injected initial_k=%d filtered_k=%d final_k=%d "
+                                "threshold=%.3f fallback=%s reranker=%s context_size=%d",
+                                len(chunks),
+                                filter_metadata["filtered_count"],
+                                len(filtered_chunks),
+                                settings.rag_min_similarity,
+                                filter_metadata["fallback_triggered"],
+                                settings.rag_reranker_type if settings.rag_reranker_enabled else "none",
+                                len(context),
+                            )
+                        else:
+                            rag_metadata = {"enabled": True, "initial_chunks": len(chunks), "error": "Context block empty"}
+                            logger.debug("RAG context block empty after formatting")
+                    else:
+                        rag_metadata = {"enabled": True, "initial_chunks": 0, "error": "No chunks retrieved"}
+                        logger.debug("RAG retrieval returned no chunks")
+                else:
+                    logger.debug("RAG skipped: empty user query")
+            else:
+                logger.debug("RAG skipped: no user messages found")
     else:
         logger.debug("RAG disabled")
     
@@ -546,17 +731,70 @@ async def stream_chatgpt(payload: ChatRequest):
     
     # Developer assistant mode: detect project questions and /help command
     is_help_command = False
+    is_review_command = False
+    review_commit_hash = None
     is_project_related = False
     git_context_str = ""
+    git_context = None
     dev_assistant_system_prompt = None
+    review_diff_data = None
     
     if settings.dev_assistant_mode:
         user_messages = [m for m in base_messages if m.get("role") == "user"]
         if user_messages:
             user_query = user_messages[-1].get("content", "")
             if user_query and user_query.strip():
+                # Check for /review command
+                if user_query.strip().lower().startswith("/review"):
+                    is_review_command = True
+                    original_query = user_query
+                    _, review_commit_hash = extract_review_query(user_query)
+                    logger.info(f"/review command detected (stream): '{original_query}' -> commit={review_commit_hash}")
+                    # For /review, we'll get diff and build RAG queries from it
+                    is_project_related = True
+                    
+                    # Get MCP manager for git diff
+                    logger.info(f"Review command (stream): getting git diff (commit={review_commit_hash or 'uncommitted'}, workspace={payload.workspace_root or settings.workspace_root})")
+                    try:
+                        mcp_mgr = await ensure_mcp_manager(
+                            mcp_config_path=(
+                                payload.mcp_config_path or settings.mcp_config_path or None
+                            ),
+                            workspace_root=Path(payload.workspace_root or settings.workspace_root),
+                        )
+                        
+                        if mcp_mgr:
+                            logger.info(f"MCP manager obtained for review (stream): {type(mcp_mgr).__name__}")
+                            review_diff_data = await get_review_diff(
+                                mcp_mgr,
+                                Path(payload.workspace_root or settings.workspace_root),
+                                review_commit_hash
+                            )
+                            if review_diff_data:
+                                if not review_diff_data.get("has_changes", False):
+                                    # No changes to review - set a clear message that will be returned
+                                    base_messages[-1]["content"] = "I checked your repository, but there are no uncommitted changes to review. All files are up to date. If you want to review a specific commit, use `/review commit` or `/review <commit-hash>`."
+                                    logger.info(f"Review command (stream): no changes found (commit={review_commit_hash or 'uncommitted'})")
+                                    # Mark that we've handled this case so RAG doesn't try to process it
+                                    review_diff_data = None
+                                else:
+                                    changed_files = review_diff_data.get('changed_files', [])
+                                    diff_length = len(review_diff_data.get('diff', ''))
+                                    logger.info(f"Review diff retrieved successfully (stream): {len(changed_files)} files changed, diff_length={diff_length} chars, commit={review_commit_hash or 'uncommitted'}")
+                                    # Update message to indicate we're ready for review
+                                    base_messages[-1]["content"] = "Please review the following code changes."
+                            else:
+                                logger.warning(f"Failed to retrieve review diff (stream): review_diff_data is None (commit={review_commit_hash or 'uncommitted'})")
+                                # Set helpful error message but keep it as a review request
+                                base_messages[-1]["content"] = "I couldn't retrieve the git diff for review. Please make sure you're in a git repository and have uncommitted changes, or specify a commit hash like `/review commit` or `/review HEAD~1`."
+                        else:
+                            logger.warning("MCP manager is None (stream) - cannot retrieve git diff")
+                    except Exception as e:
+                        logger.error(f"Failed to get review diff (stream): {e}", exc_info=True)
+                        # Continue - will handle error in review flow
+                
                 # Check for /help command
-                if user_query.strip().lower().startswith("/help"):
+                elif user_query.strip().lower().startswith("/help"):
                     is_help_command = True
                     original_query = user_query
                     user_query = extract_help_query(user_query)
@@ -570,8 +808,9 @@ async def stream_chatgpt(payload: ChatRequest):
                     # Check if question is about the project
                     is_project_related = is_project_question(user_query)
                 
+                # Always set system prompt for /review and /help commands, even if not project-related
                 # If project-related, get git context and set system prompt
-                if is_project_related:
+                if is_review_command or is_help_command or is_project_related:
                     # Get MCP manager for git context (always try builtin manager for git server)
                     try:
                         # Always try to get builtin MCP manager (includes git server)
@@ -592,7 +831,59 @@ async def stream_chatgpt(payload: ChatRequest):
                         # Continue without git context - not critical
                     
                     # Set developer assistant system prompt
-                    if is_help_command:
+                    if is_review_command:
+                        logger.info("Setting Staff Engineer system prompt for /review command (stream)")
+                        # Staff engineer system prompt for code review
+                        dev_assistant_system_prompt = (
+                            "Ты Staff Engineer, проводящий code review. "
+                            "Твоя задача - найти РЕАЛЬНЫЕ проблемы в коде и указать КОНКРЕТНЫЕ места с примерами из diff.\n\n"
+                            "ВАЖНЫЕ ПРАВИЛА:\n"
+                            "1. Указывай ТОЛЬКО те категории, где есть РЕАЛЬНЫЕ проблемы\n"
+                            "2. Для каждой проблемы указывай:\n"
+                            "   - Точное место в коде (файл, строка, функция)\n"
+                            "   - Фрагмент кода из diff с проблемой\n"
+                            "   - Конкретное объяснение проблемы\n"
+                            "   - Предложение исправления с примером кода\n"
+                            "3. Если по категории нет проблем - НЕ упоминай её вообще\n"
+                            "4. Используй формат diff для показа проблемных мест\n\n"
+                            "КАТЕГОРИИ ДЛЯ ПРОВЕРКИ (указывай только если есть проблемы):\n\n"
+                            "АРХИТЕКТУРА:\n"
+                            "- Нарушение паттернов проекта\n"
+                            "- Неправильная структура модулей\n"
+                            "- Нарушение SOLID/DRY/KISS\n"
+                            "- Проблемы интеграции\n\n"
+                            "СТИЛЬ КОДА:\n"
+                            "- Несоответствие конвенциям\n"
+                            "- Плохое именование\n"
+                            "- Отсутствие/неправильные комментарии\n\n"
+                            "БАГИ:\n"
+                            "- Отсутствие обработки ошибок\n"
+                            "- Edge cases не обработаны\n"
+                            "- Race conditions\n"
+                            "- Null/undefined проблемы\n\n"
+                            "ПРОИЗВОДИТЕЛЬНОСТЬ:\n"
+                            "- Неэффективные алгоритмы\n"
+                            "- N+1 queries\n"
+                            "- Лишние операции\n\n"
+                            "БЕЗОПАСНОСТЬ:\n"
+                            "- SQL injection, XSS риски\n"
+                            "- Отсутствие валидации\n"
+                            "- Секреты в коде\n\n"
+                            "ФОРМАТ ОТВЕТА:\n"
+                            "Для каждой проблемы используй такой формат:\n"
+                            "```\n"
+                            "📁 файл.py:123\n"
+                            "```diff\n"
+                            "- старый_код\n"
+                            "+ новый_код\n"
+                            "```\n"
+                            "❌ Проблема: [описание]\n"
+                            "✅ Исправление: [предложение]\n\n"
+                            "Используй предоставленный контекст из RAG для проверки соответствия "
+                            "архитектуре и стилю проекта. Цитируй источники как [doc_name:doc_id:chunk_index]. "
+                            "Если проблем нет - скажи кратко, что код выглядит хорошо."
+                        )
+                    elif is_help_command:
                         # Enhanced prompt for /help command - focus on code search
                         dev_assistant_system_prompt = (
                             "Ты ассистент разработчика для этого проекта. "
@@ -619,78 +910,141 @@ async def stream_chatgpt(payload: ChatRequest):
                     system_messages = [m for m in base_messages if m.get("role") == "system"]
                     if not system_messages:
                         base_messages.insert(0, {"role": "system", "content": dev_assistant_system_prompt})
+                        logger.info(f"System prompt injected (stream) for {'/review' if is_review_command else '/help' if is_help_command else 'project question'}")
                     else:
-                        # Append to existing system message
-                        existing_system = system_messages[0].get("content", "")
-                        base_messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
+                        # Replace existing system message for commands to ensure they take precedence
+                        if is_review_command or is_help_command:
+                            base_messages[0]["content"] = dev_assistant_system_prompt
+                            logger.info(f"System prompt replaced (stream) for {'/review' if is_review_command else '/help'}")
+                        else:
+                            # Append to existing system message for project questions
+                            existing_system = system_messages[0].get("content", "")
+                            base_messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
     
     # RAG retrieval (if enabled)
     if settings.rag_enabled:
-        # Extract latest user message for retrieval query
-        user_messages = [m for m in base_messages if m.get("role") == "user"]
-        if user_messages:
-            query = user_messages[-1].get("content", "")
-            if query and query.strip():
-                # For /help commands, use higher top_k to get more relevant results
-                top_k = settings.rag_top_k * 2 if is_help_command else settings.rag_top_k
-                logger.info(
-                    "RAG retrieval starting (stream) query_len=%d top_k=%d help_mode=%s",
-                    len(query),
-                    top_k,
-                    is_help_command,
-                )
-                chunks = await retrieve_chunks(
-                    query=query,
-                    top_k=top_k,
+        # Special handling for /review command
+        if is_review_command and review_diff_data and review_diff_data.get("has_changes", False):
+            # Build RAG queries from diff and changed files
+            changed_files = review_diff_data.get("changed_files", [])
+            diff = review_diff_data.get("diff", "")
+            rag_queries = build_review_rag_queries(changed_files, diff)
+            
+            # Retrieve chunks for each query and merge
+            all_chunks = []
+            seen_chunk_ids = set()
+            
+            for rag_query in rag_queries:
+                # Use higher top_k for review (15-20 chunks per query)
+                review_top_k = max(15, settings.rag_top_k * 3)
+                logger.debug(f"Review RAG query (stream): '{rag_query[:50]}...' top_k={review_top_k}")
+                
+                query_chunks = await retrieve_chunks(
+                    query=rag_query,
+                    top_k=review_top_k,
                     base_url=settings.chunkenizer_api_url,
                 )
-                if chunks:
-                    # Store baseline chunks for comparison mode
-                    baseline_chunks = chunks.copy() if settings.rag_compare_mode else None
-                    
-                    # Second-stage filtering by similarity threshold
-                    filtered_chunks, filter_metadata = filter_by_similarity(
-                        chunks,
-                        threshold=settings.rag_min_similarity,
-                        min_chunks=settings.rag_min_chunks,
-                    )
-                    
-                    # Reranking (if enabled)
-                    if settings.rag_reranker_enabled:
-                        reranker = get_reranker(settings.rag_reranker_type)
-                        filtered_chunks = await reranker.rerank(query, filtered_chunks)
-                        logger.debug(
-                            "RAG reranker applied (stream) type=%s chunks=%d",
-                            settings.rag_reranker_type,
-                            len(filtered_chunks),
-                        )
-                    
-                    # Build context from filtered/reranked chunks
-                    context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
-                    if context:
-                        # Add git context if available (for developer assistant mode)
-                        if git_context_str:
-                            context = f"{git_context_str}\n\n{context}"
-                        base_messages = inject_rag_context(base_messages, context)
-                        logger.info(
-                            "RAG context injected (stream) initial_k=%d filtered_k=%d final_k=%d "
-                            "threshold=%.3f fallback=%s reranker=%s context_size=%d",
-                            len(chunks),
-                            filter_metadata["filtered_count"],
-                            len(filtered_chunks),
-                            settings.rag_min_similarity,
-                            filter_metadata["fallback_triggered"],
-                            settings.rag_reranker_type if settings.rag_reranker_enabled else "none",
-                            len(context),
-                        )
-                    else:
-                        logger.debug("RAG context block empty after formatting (stream)")
-                else:
-                    logger.debug("RAG retrieval returned no chunks (stream)")
+                
+                # Deduplicate chunks by document_id + chunk_index
+                for chunk in query_chunks:
+                    chunk_id = f"{chunk.get('document_id', '')}:{chunk.get('chunk_index', 0)}"
+                    if chunk_id not in seen_chunk_ids:
+                        seen_chunk_ids.add(chunk_id)
+                        all_chunks.append(chunk)
+            
+            logger.info(f"Review RAG (stream): retrieved {len(all_chunks)} unique chunks from {len(rag_queries)} queries")
+            
+            # Build review context with diff + RAG chunks (even if no RAG chunks, we still have the diff)
+            review_context = build_review_context(
+                diff=diff,
+                changed_files=changed_files,
+                rag_chunks=all_chunks if all_chunks else [],
+                git_context=git_context,
+                commit_hash=review_commit_hash,
+                max_chars=settings.rag_max_context_chars * 2,  # More space for review
+            )
+            
+            if review_context:
+                # Update user message with review request
+                base_messages[-1]["content"] = "Please review the following code changes:\n\n" + review_context
+                logger.info(f"Review context built and injected into messages (stream) (diff_len={len(diff)}, rag_chunks={len(all_chunks)})")
             else:
-                logger.debug("RAG skipped: empty user query (stream)")
+                logger.warning("Review context is empty (stream) - this should not happen if diff exists")
+                # Fallback: at least include the diff
+                if diff:
+                    base_messages[-1]["content"] = "Please review the following code changes:\n\nCODE DIFF:\n\n" + diff
+                    logger.info("Using diff-only fallback for review (stream)")
+        elif is_review_command:
+            # review_diff_data is None or has_changes is False
+            # This case should have been handled earlier - message content already set to error/info
+            # Don't run standard RAG on the error message
+            logger.info(f"Review command completed (stream, no diff to process): review_diff_data={review_diff_data is not None}, message_content_len={len(base_messages[-1].get('content', '')) if base_messages else 0}")
         else:
-            logger.debug("RAG skipped: no user messages found (stream)")
+            # Standard RAG retrieval for /help and other queries
+            user_messages = [m for m in base_messages if m.get("role") == "user"]
+            if user_messages:
+                query = user_messages[-1].get("content", "")
+                if query and query.strip():
+                    # For /help commands, use higher top_k to get more relevant results
+                    top_k = settings.rag_top_k * 2 if is_help_command else settings.rag_top_k
+                    logger.info(
+                        "RAG retrieval starting (stream) query_len=%d top_k=%d help_mode=%s",
+                        len(query),
+                        top_k,
+                        is_help_command,
+                    )
+                    chunks = await retrieve_chunks(
+                        query=query,
+                        top_k=top_k,
+                        base_url=settings.chunkenizer_api_url,
+                    )
+                    if chunks:
+                        # Store baseline chunks for comparison mode
+                        baseline_chunks = chunks.copy() if settings.rag_compare_mode else None
+                        
+                        # Second-stage filtering by similarity threshold
+                        filtered_chunks, filter_metadata = filter_by_similarity(
+                            chunks,
+                            threshold=settings.rag_min_similarity,
+                            min_chunks=settings.rag_min_chunks,
+                        )
+                        
+                        # Reranking (if enabled)
+                        if settings.rag_reranker_enabled:
+                            reranker = get_reranker(settings.rag_reranker_type)
+                            filtered_chunks = await reranker.rerank(query, filtered_chunks)
+                            logger.debug(
+                                "RAG reranker applied (stream) type=%s chunks=%d",
+                                settings.rag_reranker_type,
+                                len(filtered_chunks),
+                            )
+                        
+                        # Build context from filtered/reranked chunks
+                        context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
+                        if context:
+                            # Add git context if available (for developer assistant mode)
+                            if git_context_str:
+                                context = f"{git_context_str}\n\n{context}"
+                            base_messages = inject_rag_context(base_messages, context)
+                            logger.info(
+                                "RAG context injected (stream) initial_k=%d filtered_k=%d final_k=%d "
+                                "threshold=%.3f fallback=%s reranker=%s context_size=%d",
+                                len(chunks),
+                                filter_metadata["filtered_count"],
+                                len(filtered_chunks),
+                                settings.rag_min_similarity,
+                                filter_metadata["fallback_triggered"],
+                                settings.rag_reranker_type if settings.rag_reranker_enabled else "none",
+                                len(context),
+                            )
+                        else:
+                            logger.debug("RAG context block empty after formatting (stream)")
+                    else:
+                        logger.debug("RAG retrieval returned no chunks (stream)")
+                else:
+                    logger.debug("RAG skipped: empty user query (stream)")
+            else:
+                logger.debug("RAG skipped: no user messages found (stream)")
     else:
         logger.debug("RAG disabled (stream)")
     

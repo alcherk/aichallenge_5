@@ -1,6 +1,7 @@
 """Get Git context for developer assistant mode."""
 import logging
-from typing import Dict, Any, Optional
+import re
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 logger = logging.getLogger("app.rag.git")
@@ -111,3 +112,146 @@ def format_git_context(git_context: Optional[Dict[str, Any]]) -> str:
             lines.append(f"  Untracked: {', '.join(untracked[:5])}{'...' if len(untracked) > 5 else ''}")
     
     return "\n".join(lines) if len(lines) > 1 else ""
+
+
+def _extract_changed_files_from_diff(diff: str) -> List[str]:
+    """
+    Extract list of changed files from git diff output.
+    
+    Args:
+        diff: Git diff output
+    
+    Returns:
+        List of file paths that were changed
+    """
+    if not diff:
+        return []
+    
+    changed_files = []
+    # Pattern: "diff --git a/path/to/file b/path/to/file"
+    pattern = r'^diff --git a/(.+?) b/(.+?)$'
+    
+    for line in diff.split('\n'):
+        match = re.match(pattern, line)
+        if match:
+            # Use the 'b' path (new file path)
+            file_path = match.group(2)
+            if file_path not in changed_files:
+                changed_files.append(file_path)
+    
+    return changed_files
+
+
+async def get_review_diff(
+    mcp_manager: Any,
+    workspace_root: Path,
+    commit_hash: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Get git diff for code review.
+    
+    Args:
+        mcp_manager: MCPManager instance
+        workspace_root: Repository root path
+        commit_hash: Optional commit hash (None = uncommitted changes)
+    
+    Returns:
+        Dict with diff, changed_files, commit, or None if error
+    """
+    if not mcp_manager:
+        logger.warning("MCP manager not available for review diff")
+        return None
+    
+    try:
+        # Find git MCP tools
+        git_tool_names = []
+        for tool_name, binding in mcp_manager._tool_bindings.items():
+            if binding.server_name == "builtin_git":
+                git_tool_names.append((tool_name, binding.mcp_tool_name))
+        
+        if not git_tool_names:
+            logger.warning("Git MCP tools not found for review diff. Available tools: %s", 
+                         list(mcp_manager._tool_bindings.keys())[:10])
+            return None
+        
+        logger.info(f"Found {len(git_tool_names)} Git MCP tools: {[name for _, name in git_tool_names]}")
+        
+        # Find git_diff tool
+        git_diff_tool = None
+        for openai_name, mcp_name in git_tool_names:
+            if mcp_name == "git_diff":
+                git_diff_tool = openai_name
+                break
+        
+        if not git_diff_tool:
+            logger.warning("git_diff MCP tool not found. Available git tools: %s", 
+                         [name for _, name in git_tool_names])
+            return None
+        
+        logger.info(f"Using git_diff tool: {git_diff_tool} (MCP name: git_diff)")
+        
+        # Prepare arguments for git_diff
+        # git_server expects: {"commit": "HEAD"} or {"commit": "HEAD~1"} or {} for uncommitted
+        arguments = {}
+        if commit_hash:
+            # Review specific commit: diff between commit and its parent
+            # git_server expects "commit" parameter
+            arguments["commit"] = commit_hash
+            logger.info(f"Requesting git diff for commit: {commit_hash}")
+        else:
+            # Empty arguments = uncommitted changes (working tree diff)
+            logger.info("Requesting git diff for uncommitted changes (working tree), arguments={}")
+        
+        try:
+            logger.info(f"Calling git_diff MCP tool: {git_diff_tool} with arguments: {arguments}")
+            import asyncio
+            try:
+                # Add timeout to prevent hanging
+                diff_result = await asyncio.wait_for(
+                    mcp_manager.call_openai_tool(git_diff_tool, arguments),
+                    timeout=15.0
+                )
+                logger.info(f"Git diff MCP tool call completed successfully")
+            except asyncio.TimeoutError:
+                logger.error(f"Git diff MCP tool call timed out after 15 seconds")
+                return None
+            except Exception as e:
+                logger.error(f"Git diff MCP tool call failed: {e}", exc_info=True)
+                return None
+            
+            if not isinstance(diff_result, dict):
+                logger.warning(f"Unexpected diff result type: {type(diff_result)}, value: {str(diff_result)[:200]}")
+                return None
+            
+            diff_text = diff_result.get("diff", "")
+            diff_length = len(diff_text) if diff_text else 0
+            
+            logger.info(f"Git diff retrieved: length={diff_length} chars, commit={commit_hash or 'uncommitted'}")
+            
+            if not diff_text or diff_text.strip() == "":
+                logger.info(f"No changes found for review (commit={commit_hash or 'uncommitted'})")
+                return {
+                    "diff": "",
+                    "changed_files": [],
+                    "commit": commit_hash,
+                    "has_changes": False,
+                }
+            
+            # Extract changed files from diff
+            changed_files = _extract_changed_files_from_diff(diff_text)
+            logger.info(f"Extracted {len(changed_files)} changed files from diff: {changed_files[:5]}{'...' if len(changed_files) > 5 else ''}")
+            
+            return {
+                "diff": diff_text,
+                "changed_files": changed_files,
+                "commit": commit_hash,
+                "has_changes": True,
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to call git_diff MCP tool: {e}", exc_info=True)
+            return None
+        
+    except Exception as e:
+        logger.exception(f"Error getting review diff: {e}")
+        return None

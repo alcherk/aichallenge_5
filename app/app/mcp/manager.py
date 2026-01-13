@@ -264,7 +264,13 @@ class MCPManager:
         if binding.kind == "filesystem":
             guard_filesystem_tool_args(self._workspace_root, binding.mcp_tool_name, call_args)
 
-        result = await session.call_tool(binding.mcp_tool_name, call_args)
+        logger.debug(f"Calling MCP tool: server={binding.server_name}, tool={binding.mcp_tool_name}, args={call_args}")
+        try:
+            result = await session.call_tool(binding.mcp_tool_name, call_args)
+            logger.debug(f"MCP tool call completed: server={binding.server_name}, tool={binding.mcp_tool_name}")
+        except Exception as e:
+            logger.error(f"MCP tool call failed: server={binding.server_name}, tool={binding.mcp_tool_name}, error={e}", exc_info=True)
+            raise
 
         if binding.kind == "fetch":
             guard_fetch_tool_result(binding.mcp_tool_name, result)
@@ -334,47 +340,58 @@ async def ensure_mcp_manager(*, mcp_config_path: Optional[str], workspace_root: 
                 pass
             _MANAGER = None
 
+        # Always include builtin servers (filesystem, fetch, git)
+        py = sys.executable
+        builtin_servers = [
+            MCPServerConfig(
+                name="builtin_filesystem",
+                transport="stdio",
+                kind="filesystem",
+                command=[
+                    py,
+                    "-m",
+                    "app.app.mcp.servers.filesystem_server",
+                    "--root",
+                    str(workspace_root),
+                ],
+            ),
+            MCPServerConfig(
+                name="builtin_fetch",
+                transport="stdio",
+                kind="fetch",
+                command=[py, "-m", "app.app.mcp.servers.fetch_server"],
+            ),
+            MCPServerConfig(
+                name="builtin_git",
+                transport="stdio",
+                kind="generic",
+                command=[
+                    py,
+                    "-m",
+                    "app.app.mcp.servers.git_server",
+                    "--root",
+                    str(workspace_root),
+                ],
+            ),
+        ]
+        
         if mcp_config_path:
-            cfg = load_mcp_config(mcp_config_path)
-            if cfg is None or not cfg.servers:
-                return None
+            # Load config from file and merge with builtin servers
+            file_cfg = load_mcp_config(mcp_config_path)
+            if file_cfg is None or not file_cfg.servers:
+                # If file config is empty, use only builtin servers
+                cfg = MCPConfig(servers=builtin_servers)
+            else:
+                # Merge: builtin servers first, then file config servers
+                # This ensures builtin servers are always available
+                all_servers = builtin_servers + file_cfg.servers
+                cfg = MCPConfig(servers=all_servers)
+                logger.info(f"MCP config loaded from {mcp_config_path}: {len(file_cfg.servers)} servers, "
+                          f"merged with {len(builtin_servers)} builtin servers (total: {len(all_servers)})")
         else:
-            # Built-in default: filesystem + fetch + git stdio servers.
-            py = sys.executable
-            cfg = MCPConfig(
-                servers=[
-                    MCPServerConfig(
-                        name="builtin_filesystem",
-                        transport="stdio",
-                        kind="filesystem",
-                        command=[
-                            py,
-                            "-m",
-                            "app.app.mcp.servers.filesystem_server",
-                            "--root",
-                            str(workspace_root),
-                        ],
-                    ),
-                    MCPServerConfig(
-                        name="builtin_fetch",
-                        transport="stdio",
-                        kind="fetch",
-                        command=[py, "-m", "app.app.mcp.servers.fetch_server"],
-                    ),
-                    MCPServerConfig(
-                        name="builtin_git",
-                        transport="stdio",
-                        kind="generic",
-                        command=[
-                            py,
-                            "-m",
-                            "app.app.mcp.servers.git_server",
-                            "--root",
-                            str(workspace_root),
-                        ],
-                    ),
-                ]
-            )
+            # No config file: use only builtin servers
+            cfg = MCPConfig(servers=builtin_servers)
+            logger.info(f"Using builtin MCP servers only: {len(builtin_servers)} servers")
 
         _MANAGER = MCPManager(config=cfg, workspace_root=workspace_root, config_source=config_source)
         await _MANAGER.connect()

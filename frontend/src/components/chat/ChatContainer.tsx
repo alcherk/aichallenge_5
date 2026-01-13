@@ -42,13 +42,23 @@ export const ChatContainer: React.FC = () => {
         const fallbackConfigPath = '/Users/lex/Projects/ai/AI_Challenge_5/week1_day1/mcp_servers.json';
         const effectiveConfigPath = (mcpConfigPath && mcpConfigPath.trim()) || fallbackConfigPath;
 
+        // Default workspace root for /review and /help commands
+        const defaultWorkspaceRoot = '/Users/lex/Projects/ai/AI_Challenge_5/week1_day1';
+        const isReviewOrHelpCommand = content.trim().toLowerCase().startsWith('/review') || 
+                                      content.trim().toLowerCase().startsWith('/help');
+        
+        // Use default workspace root for /review and /help commands, otherwise use settings
+        const effectiveWorkspaceRoot = isReviewOrHelpCommand
+          ? defaultWorkspaceRoot
+          : (workspaceRoot && workspaceRoot.trim()) || null;
+
         const data = await chatAPI.sendMessage({
           messages: conversationMessages,
           temperature,
           model,
           mcp_enabled: true,
           mcp_config_path: effectiveConfigPath || null,
-          workspace_root: (workspaceRoot && workspaceRoot.trim()) || null,
+          workspace_root: effectiveWorkspaceRoot,
         });
 
         const assistantText = data?.data?.choices?.[0]?.message?.content || '';

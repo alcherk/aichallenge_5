@@ -1,5 +1,5 @@
 """Build context blocks from retrieved chunks with citations."""
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 def build_context_block(chunks: List[Dict[str, Any]], max_chars: int = 8000) -> str:
@@ -67,4 +67,120 @@ def build_context_block(chunks: List[Dict[str, Any]], max_chars: int = 8000) -> 
     context = "CONTEXT:\n\n" + "\n\n".join(formatted_chunks)
     
     return context
+
+
+def build_review_context(
+    diff: str,
+    changed_files: List[str],
+    rag_chunks: List[Dict[str, Any]],
+    git_context: Optional[Dict[str, Any]] = None,
+    commit_hash: Optional[str] = None,
+    max_chars: int = 16000
+) -> str:
+    """
+    Build context block for code review.
+    
+    Format:
+    - Git context (branch, commit info if applicable)
+    - Changed files list
+    - Full diff
+    - RAG chunks (architecture guides, codestyle, related code)
+    - Citations for all sources
+    
+    Args:
+        diff: Git diff content
+        changed_files: List of changed file paths
+        rag_chunks: List of RAG chunks with architecture/codestyle info
+        git_context: Optional git context dict (branch, etc.)
+        commit_hash: Optional commit hash being reviewed
+        max_chars: Maximum total characters (truncates if exceeded)
+    
+    Returns:
+        Formatted review context string
+    """
+    parts = []
+    total_chars = 0
+    
+    # 1. Git context section
+    if git_context:
+        git_lines = ["GIT CONTEXT:"]
+        branch = git_context.get("branch")
+        if branch:
+            git_lines.append(f"Branch: {branch}")
+        if commit_hash:
+            git_lines.append(f"Reviewing commit: {commit_hash}")
+        else:
+            git_lines.append("Reviewing: Uncommitted changes")
+        git_section = "\n".join(git_lines)
+        parts.append(git_section)
+        total_chars += len(git_section) + 2  # +2 for newlines
+    
+    # 2. Changed files section
+    if changed_files:
+        files_section = f"CHANGED FILES ({len(changed_files)}):\n" + "\n".join(f"  - {f}" for f in changed_files)
+        parts.append(files_section)
+        total_chars += len(files_section) + 2
+    
+    # 3. Diff section
+    if diff:
+        # Truncate diff if needed to leave room for RAG chunks
+        remaining_for_rag = max(2000, max_chars - total_chars - 2000)  # Reserve at least 2000 for RAG
+        remaining_for_diff = max_chars - remaining_for_rag - total_chars
+        
+        if len(diff) > remaining_for_diff:
+            truncated_diff = diff[:remaining_for_diff] + f"\n\n[... diff truncated, {len(diff) - remaining_for_diff} chars remaining ...]"
+            diff_section = f"CODE DIFF:\n\n{truncated_diff}"
+        else:
+            diff_section = f"CODE DIFF:\n\n{diff}"
+        
+        parts.append(diff_section)
+        total_chars += len(diff_section) + 2
+    
+    # 4. RAG chunks section (architecture, codestyle, related code)
+    if rag_chunks:
+        # Format RAG chunks with citations
+        formatted_rag = []
+        rag_chars = 0
+        remaining = max_chars - total_chars - len("REFERENCE DOCUMENTATION:\n\n")
+        
+        for chunk in rag_chunks:
+            chunk_text = chunk.get("chunk_text", "").strip()
+            doc_id = chunk.get("document_id", "")
+            doc_name = chunk.get("document_name", "")
+            chunk_index = chunk.get("chunk_index", 0)
+            
+            if not chunk_text:
+                continue
+            
+            # Format citation
+            if doc_name:
+                citation = f"[{doc_name}:{doc_id}:{chunk_index}]"
+            else:
+                citation = f"[{doc_id}:{chunk_index}]"
+            
+            chunk_line = f"{chunk_text} {citation}"
+            chunk_size = len(chunk_line) + 2  # +2 for newlines
+            
+            if rag_chars + chunk_size > remaining:
+                # Truncate this chunk if needed
+                remaining_for_chunk = remaining - rag_chars - len(citation) - 3
+                if remaining_for_chunk > 20:
+                    truncated_text = chunk_text[:remaining_for_chunk] + "..."
+                    chunk_line = f"{truncated_text} {citation}"
+                    formatted_rag.append(chunk_line)
+                break
+            
+            formatted_rag.append(chunk_line)
+            rag_chars += chunk_size
+        
+        if formatted_rag:
+            rag_section = "REFERENCE DOCUMENTATION:\n\n" + "\n\n".join(formatted_rag)
+            parts.append(rag_section)
+            total_chars += len(rag_section) + 2
+    
+    # Combine all parts
+    if not parts:
+        return ""
+    
+    return "\n\n".join(parts)
 
