@@ -9,7 +9,7 @@ import { ChatInput } from './ChatInput';
 
 export const ChatContainer: React.FC = () => {
   const { messages, addMessage, setIsStreaming, isStreaming } = useChatStore();
-  const { systemPrompt, temperature, model, mcpConfigPath, workspaceRoot } = useSettingsStore();
+  const { systemPrompt, temperature, model, mcpConfigPath, workspaceRoot, assistantMode } = useSettingsStore();
   const { updateMetrics } = useMetricsStore();
 
   const [messageResponses] = React.useState(new Map<number, StructuredResponse>());
@@ -59,6 +59,7 @@ export const ChatContainer: React.FC = () => {
           mcp_enabled: true,
           mcp_config_path: effectiveConfigPath || null,
           workspace_root: effectiveWorkspaceRoot,
+          assistant_mode: assistantMode || null,
         });
 
         const assistantText = data?.data?.choices?.[0]?.message?.content || '';
@@ -124,6 +125,7 @@ export const ChatContainer: React.FC = () => {
       model,
       mcpConfigPath,
       workspaceRoot,
+      assistantMode,
       addMessage,
       setIsStreaming,
       updateMetrics,

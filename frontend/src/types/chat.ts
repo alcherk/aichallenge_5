@@ -16,6 +16,8 @@ export interface ChatRequest {
   mcp_enabled?: boolean | null;
   mcp_config_path?: string | null;
   workspace_root?: string | null;
+  // Assistant mode: strict RAG-only mode
+  assistant_mode?: boolean | null;
 }
 
 export interface TokenUsage {

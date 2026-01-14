@@ -28,21 +28,34 @@ def build_context_block(chunks: List[Dict[str, Any]], max_chars: int = 8000) -> 
     formatted_chunks = []
     total_chars = len("CONTEXT:\n\n")
     
+    def _best_doc_name(chunk: Dict[str, Any]) -> str:
+        """
+        Prefer an explicit document_name; otherwise try to derive something human-friendly
+        from metadata so citations don't end up as placeholders.
+        """
+        doc_name = (chunk.get("document_name") or "").strip()
+        if doc_name:
+            return doc_name
+        metadata = chunk.get("metadata") or {}
+        if isinstance(metadata, dict):
+            for key in ("document_name", "source", "filename", "file_name", "path", "file_path"):
+                v = metadata.get(key)
+                if isinstance(v, str) and v.strip():
+                    # If it's a path, keep only basename for cleaner citations.
+                    return v.strip().split("/")[-1]
+        return "unknown"
+
     for chunk in chunks:
         chunk_text = chunk.get("chunk_text", "").strip()
         doc_id = chunk.get("document_id", "")
-        doc_name = chunk.get("document_name", "")
+        doc_name = _best_doc_name(chunk)
         chunk_index = chunk.get("chunk_index", 0)
         
         if not chunk_text:
             continue
         
-        # Format: [chunk_text] [doc_name:doc_id:chunk_index]
-        # If document_name is not available, fall back to just doc_id:chunk_index
-        if doc_name:
-            citation = f"[{doc_name}:{doc_id}:{chunk_index}]"
-        else:
-            citation = f"[{doc_id}:{chunk_index}]"
+        # Always emit a 3-part citation so the model can copy it verbatim.
+        citation = f"[{doc_name}:{doc_id}:{chunk_index}]"
         chunk_line = f"{chunk_text} {citation}"
         
         # Check if adding this chunk would exceed limit

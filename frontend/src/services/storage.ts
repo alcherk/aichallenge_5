@@ -13,6 +13,7 @@ const KEYS = {
   MCP_ENABLED: 'mcpEnabled',
   MCP_CONFIG_PATH: 'mcpConfigPath',
   WORKSPACE_ROOT: 'workspaceRoot',
+  ASSISTANT_MODE: 'assistantMode',
   TOTAL_METRICS: 'totalMetrics',
 } as const;
 
@@ -80,6 +81,7 @@ export const settingsStorage = {
       mcpEnabled: safeGet<boolean>(KEYS.MCP_ENABLED, DEFAULT_SETTINGS.mcpEnabled),
       mcpConfigPath: safeGet<string>(KEYS.MCP_CONFIG_PATH, DEFAULT_SETTINGS.mcpConfigPath),
       workspaceRoot: safeGet<string>(KEYS.WORKSPACE_ROOT, DEFAULT_SETTINGS.workspaceRoot),
+      assistantMode: safeGet<boolean>(KEYS.ASSISTANT_MODE, DEFAULT_SETTINGS.assistantMode),
     };
   },
 
@@ -91,6 +93,7 @@ export const settingsStorage = {
     safeSet(KEYS.MCP_ENABLED, settings.mcpEnabled);
     safeSet(KEYS.MCP_CONFIG_PATH, settings.mcpConfigPath);
     safeSet(KEYS.WORKSPACE_ROOT, settings.workspaceRoot);
+    safeSet(KEYS.ASSISTANT_MODE, settings.assistantMode);
   },
 
   setSystemPrompt(prompt: string): void {
@@ -119,6 +122,10 @@ export const settingsStorage = {
 
   setWorkspaceRoot(path: string): void {
     safeSet(KEYS.WORKSPACE_ROOT, path);
+  },
+
+  setAssistantMode(enabled: boolean): void {
+    safeSet(KEYS.ASSISTANT_MODE, enabled);
   },
 };
 

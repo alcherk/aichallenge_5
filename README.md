@@ -187,6 +187,33 @@ This project supports **RAG** to enhance chat responses with retrieved document 
 - `RAG_MAX_CONTEXT_CHARS`: Maximum context size before truncation (default: `8000`)
 - `CHUNKENIZER_API_URL`: Chunkenizer API base URL (default: `http://localhost:8000`)
 
+### Assistant Mode
+
+Assistant Mode is a strict RAG-only mode that can be enabled via the UI toggle in Settings. When enabled:
+
+- **Strict RAG-only**: The assistant ONLY answers using information from RAG documents and FAQs
+- **No assumptions**: If information is not found in RAG, responds exactly: "I don't have that information"
+- **No general knowledge**: Does not use general knowledge outside the provided context
+- **No Git context**: Unlike Developer Assistant Mode, does not include Git context (branch, modified files)
+- **Citations**: Includes citations in the format `[doc_name:doc_id:chunk_index]` when using information from context
+
+**How to enable:**
+1. Open Settings panel (gear icon)
+2. Toggle "Assistant Mode" switch
+3. Save settings
+
+**Use cases:**
+- FAQ systems where you want strict answers only from loaded documents
+- Documentation Q&A where you don't want the assistant to make assumptions
+- Knowledge bases where accuracy is critical and general knowledge should be avoided
+
+**Behavior:**
+- If RAG chunks are found: Assistant uses the context to answer the question
+- If no RAG chunks are found: Assistant immediately responds "I don't have that information" without calling the LLM
+- Works independently of `RAG_ENABLED` setting: Forces RAG retrieval even if RAG is disabled globally
+
+**Note:** Assistant Mode is separate from Developer Assistant Mode. When Assistant Mode is enabled, Developer Assistant Mode features (Git context, `/help`, `/review` commands) are disabled for that request.
+
 ### Developer Assistant Mode
 
 The service includes a developer assistant mode that automatically uses RAG with project documentation and Git context for questions about the project.
@@ -654,6 +681,7 @@ All user data stored in browser localStorage:
 
 ## Documentation
 
+- [FAQ.md](FAQ.md) - Frequently Asked Questions (installation, configuration, troubleshooting)
 - [CLAUDE.md](CLAUDE.md) - Development guide for Claude Code
 - [WEB_UI_ARCHITECTURE.md](WEB_UI_ARCHITECTURE.md) - Frontend architecture proposal
 - [DEPLOYMENT.md](DEPLOYMENT.md) - Complete deployment guide
@@ -671,10 +699,11 @@ All user data stored in browser localStorage:
 ## Support
 
 For issues:
-1. Check logs: `docker logs chatgpt-proxy`
-2. Verify environment variables
-3. Test health endpoint: `curl http://localhost:8333/health`
-4. Review [DEPLOYMENT.md](DEPLOYMENT.md) troubleshooting section
+1. Check [FAQ.md](FAQ.md) for common problems and solutions
+2. Check logs: `docker logs chatgpt-proxy`
+3. Verify environment variables
+4. Test health endpoint: `curl http://localhost:8333/health`
+5. Review [DEPLOYMENT.md](DEPLOYMENT.md) troubleshooting section
 
 ## License
 

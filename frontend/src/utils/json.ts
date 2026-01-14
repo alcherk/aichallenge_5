@@ -33,21 +33,16 @@ export function extractJSON(str: string | null | undefined): string | null {
     return trimmed;
   }
 
-  // Try extracting from markdown code blocks
+  // Try extracting from a *standalone* markdown code block (no surrounding text).
+  // This prevents the UI from hiding normal answers that merely include JSON examples.
   const jsonMatch = trimmed.match(/```(?:json)?\s*(\{[\s\S]*?\}|\[[\s\S]*?\])\s*```/);
-  if (jsonMatch && isJSON(jsonMatch[1])) {
-    return jsonMatch[1];
-  }
-
-  // Try finding JSON object/array in the text
-  const jsonObjMatch = trimmed.match(/\{[\s\S]*\}/);
-  if (jsonObjMatch && isJSON(jsonObjMatch[0])) {
-    return jsonObjMatch[0];
-  }
-
-  const jsonArrayMatch = trimmed.match(/\[[\s\S]*\]/);
-  if (jsonArrayMatch && isJSON(jsonArrayMatch[0])) {
-    return jsonArrayMatch[0];
+  if (jsonMatch) {
+    const fullBlock = jsonMatch[0];
+    const extracted = jsonMatch[1];
+    const withoutBlock = trimmed.replace(fullBlock, '').trim();
+    if (!withoutBlock && isJSON(extracted)) {
+      return extracted;
+    }
   }
 
   return null;

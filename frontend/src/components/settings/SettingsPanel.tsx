@@ -20,6 +20,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     mcpEnabled,
     mcpConfigPath,
     workspaceRoot,
+    assistantMode,
     setSystemPrompt,
     setTemperature,
     setModel,
@@ -27,6 +28,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     setMcpEnabled,
     setMcpConfigPath,
     setWorkspaceRoot,
+    setAssistantMode,
     resetToDefaults,
   } = useSettingsStore();
 
@@ -40,6 +42,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
   const [localMcpEnabled, setLocalMcpEnabled] = useState(mcpEnabled);
   const [localMcpConfigPath, setLocalMcpConfigPath] = useState(mcpConfigPath);
   const [localWorkspaceRoot, setLocalWorkspaceRoot] = useState(workspaceRoot);
+  const [localAssistantMode, setLocalAssistantMode] = useState(assistantMode);
 
   // Sync local state when settings change
   useEffect(() => {
@@ -50,7 +53,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     setLocalMcpEnabled(mcpEnabled);
     setLocalMcpConfigPath(mcpConfigPath);
     setLocalWorkspaceRoot(workspaceRoot);
-  }, [systemPrompt, temperature, model, compressionThreshold, mcpEnabled, mcpConfigPath, workspaceRoot]);
+    setLocalAssistantMode(assistantMode);
+  }, [systemPrompt, temperature, model, compressionThreshold, mcpEnabled, mcpConfigPath, workspaceRoot, assistantMode]);
 
   const handleSave = () => {
     setSystemPrompt(localSystemPrompt);
@@ -60,6 +64,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
     setMcpEnabled(localMcpEnabled);
     setMcpConfigPath(localMcpConfigPath);
     setWorkspaceRoot(localWorkspaceRoot);
+    setAssistantMode(localAssistantMode);
 
     // Update system message in current conversation
     const updatedMessages = [...messages];
@@ -83,6 +88,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
       setLocalMcpEnabled(DEFAULT_SETTINGS.mcpEnabled);
       setLocalMcpConfigPath(DEFAULT_SETTINGS.mcpConfigPath);
       setLocalWorkspaceRoot(DEFAULT_SETTINGS.workspaceRoot);
+      setLocalAssistantMode(DEFAULT_SETTINGS.assistantMode);
       resetToDefaults();
     }
   };
@@ -163,6 +169,33 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
             </div>
             <p className="text-xs text-slate-400 mt-1">
               Automatically compress conversation history after this many messages
+            </p>
+          </div>
+
+          {/* Assistant Mode Settings */}
+          <div className="border-t border-slate-700 pt-6">
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-semibold text-slate-300">
+                Assistant Mode
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={localAssistantMode}
+                  onChange={(e) => {
+                    const next = e.target.checked;
+                    setLocalAssistantMode(next);
+                    // Apply immediately so chat requests reflect the toggle even if user closes without Save.
+                    setAssistantMode(next);
+                  }}
+                  className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-600 focus:ring-blue-500"
+                />
+                Enable
+              </label>
+            </div>
+
+            <p className="text-xs text-slate-400 mb-3">
+              When enabled, assistant only answers using RAG documents and FAQs. Responds "I don't have that information" if no relevant info found. Does not assume or fabricate information.
             </p>
           </div>
 

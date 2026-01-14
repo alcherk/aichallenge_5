@@ -14,6 +14,7 @@ interface SettingsState extends Settings {
   setMcpEnabled: (enabled: boolean) => void;
   setMcpConfigPath: (path: string) => void;
   setWorkspaceRoot: (path: string) => void;
+  setAssistantMode: (enabled: boolean) => void;
   resetToDefaults: () => void;
   loadFromStorage: () => void;
 }
@@ -54,6 +55,11 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   setWorkspaceRoot: (workspaceRoot) => {
     set({ workspaceRoot });
     settingsStorage.setWorkspaceRoot(workspaceRoot);
+  },
+
+  setAssistantMode: (assistantMode) => {
+    set({ assistantMode });
+    settingsStorage.setAssistantMode(assistantMode);
   },
 
   resetToDefaults: () => {

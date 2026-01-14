@@ -19,6 +19,8 @@ class ChatRequest(BaseModel):
     mcp_enabled: Optional[bool] = None
     mcp_config_path: Optional[str] = None
     workspace_root: Optional[str] = None
+    # Assistant mode: strict RAG-only mode
+    assistant_mode: Optional[bool] = None
 
 
 class ChatChoice(BaseModel):

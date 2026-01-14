@@ -9,11 +9,11 @@ import os
 import httpx
 
 from ..config import get_settings
-from ..schemas import ChatRequest, ChatResponse
+from ..schemas import ChatRequest, ChatResponse, ChatChoice, ChatMessage
 from ..mcp.manager import ensure_mcp_manager
 from ..rag.chunkenizer_adapter import retrieve_chunks
 from ..rag.context_builder import build_context_block
-from ..rag.prompt_injector import inject_rag_context
+from ..rag.prompt_injector import inject_rag_context, inject_rag_context_strict
 from ..rag.filter import filter_by_similarity
 from ..rag.reranker import get_reranker
 from ..rag.project_detector import is_project_question, extract_help_query, extract_review_query, build_review_rag_queries
@@ -321,8 +321,8 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
     # Store baseline messages for comparison mode (before RAG processing)
     baseline_messages = None
     rag_metadata = None  # Will store RAG decision-making metadata
-    
-    # Developer assistant mode: detect project questions and /help command
+
+    # Default flags (must exist regardless of DEV_ASSISTANT_MODE / Assistant Mode)
     is_help_command = False
     is_review_command = False
     review_commit_hash = None
@@ -332,9 +332,103 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
     dev_assistant_system_prompt = None
     review_diff_data = None
     
-    if settings.dev_assistant_mode:
+    # Assistant Mode: strict RAG-only mode
+    assistant_mode = payload.assistant_mode if payload.assistant_mode is not None else False
+    if assistant_mode:
+        logger.info("Assistant Mode enabled: strict RAG-only mode")
+        # Set strict assistant system prompt
+        assistant_system_prompt = (
+            "You are an assistant that answers questions using ONLY the provided context from documents and FAQs.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Answer ONLY using information from the provided context\n"
+            "2. If the information is NOT in the context, respond EXACTLY: \"I don't have that information\"\n"
+            "3. DO NOT assume, guess, or fabricate information\n"
+            "4. DO NOT use general knowledge outside the provided context\n"
+            "5. Cite sources by copying the exact citation tags attached to context snippets "
+            "(example: [README.md:abc123:0]). Do NOT output the placeholder [doc_name:doc_id:chunk_index].\n\n"
+            "If no relevant context is provided or found, you MUST respond: \"I don't have that information\""
+        )
+        
+        # Replace or inject system prompt
+        system_messages = [m for m in messages if m.get("role") == "system"]
+        if not system_messages:
+            messages.insert(0, {"role": "system", "content": assistant_system_prompt})
+        else:
+            messages[0]["content"] = assistant_system_prompt
+        
+        # Force RAG retrieval (even if RAG_ENABLED=false)
         user_messages = [m for m in messages if m.get("role") == "user"]
         if user_messages:
+            query = user_messages[-1].get("content", "")
+            if query and query.strip():
+                logger.info(f"Assistant Mode: forcing RAG retrieval for query (len={len(query)})")
+                chunks = await retrieve_chunks(
+                    query=query,
+                    top_k=settings.rag_top_k,
+                    base_url=settings.chunkenizer_api_url,
+                )
+                
+                if not chunks:
+                    # No chunks found - return early with error response
+                    logger.warning("Assistant Mode: no RAG chunks found, returning error response")
+                    error_response = ChatResponse(
+                        id="assistant-mode-no-context",
+                        model=payload.model or settings.model,
+                        choices=[
+                            ChatChoice(
+                                index=0,
+                                message=ChatMessage(role="assistant", content="I don't have that information"),
+                                finish_reason="stop"
+                            )
+                        ]
+                    )
+                    rag_metadata = {
+                        "enabled": True,
+                        "assistant_mode": True,
+                        "initial_chunks": 0,
+                        "final_chunks": 0,
+                        "error": "No relevant information found in RAG documents"
+                    }
+                    return error_response, rag_metadata
+
+                # Assistant Mode: apply a more permissive similarity filter (with fallback).
+                assistant_threshold = getattr(settings, "assistant_rag_min_similarity", 0.0)
+                filtered_chunks, filter_meta = filter_by_similarity(
+                    chunks,
+                    threshold=assistant_threshold,
+                    min_chunks=settings.rag_min_chunks,
+                )
+                
+                # Chunks found - inject with strict instructions
+                context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
+                messages = inject_rag_context_strict(messages, context)
+                
+                rag_metadata = {
+                    "enabled": True,
+                    "assistant_mode": True,
+                    "initial_chunks": len(chunks),
+                    "filtered_chunks": filter_meta.get("filtered_count"),
+                    "final_chunks": len(filtered_chunks),
+                    "threshold": assistant_threshold,
+                    "fallback_triggered": filter_meta.get("fallback_triggered"),
+                    "scores_range": filter_meta.get("scores_range"),
+                    "context_size": len(context)
+                }
+                logger.info(
+                    "Assistant Mode: injected chunks initial=%d filtered=%d final=%d threshold=%.3f",
+                    len(chunks),
+                    filter_meta.get("filtered_count", len(filtered_chunks)),
+                    len(filtered_chunks),
+                    assistant_threshold,
+                )
+        
+        # Skip Developer Assistant Mode and proceed to LLM call
+        # (messages are already prepared with strict RAG context)
+    else:
+        # Developer assistant mode: detect project questions and /help command
+        if settings.dev_assistant_mode:
+            user_messages = [m for m in messages if m.get("role") == "user"]
+        if settings.dev_assistant_mode and user_messages:
             user_query = user_messages[-1].get("content", "")
             if user_query and user_query.strip():
                 # Check for /review command
@@ -728,8 +822,8 @@ async def stream_chatgpt(payload: ChatRequest):
     }
 
     base_messages = _prepare_messages(payload)
-    
-    # Developer assistant mode: detect project questions and /help command
+
+    # Default flags (must exist regardless of DEV_ASSISTANT_MODE / Assistant Mode)
     is_help_command = False
     is_review_command = False
     review_commit_hash = None
@@ -739,9 +833,84 @@ async def stream_chatgpt(payload: ChatRequest):
     dev_assistant_system_prompt = None
     review_diff_data = None
     
-    if settings.dev_assistant_mode:
+    # Assistant Mode: strict RAG-only mode
+    assistant_mode = payload.assistant_mode if payload.assistant_mode is not None else False
+    if assistant_mode:
+        logger.info("Assistant Mode enabled (stream): strict RAG-only mode")
+        # Set strict assistant system prompt
+        assistant_system_prompt = (
+            "You are an assistant that answers questions using ONLY the provided context from documents and FAQs.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Answer ONLY using information from the provided context\n"
+            "2. If the information is NOT in the context, respond EXACTLY: \"I don't have that information\"\n"
+            "3. DO NOT assume, guess, or fabricate information\n"
+            "4. DO NOT use general knowledge outside the provided context\n"
+            "5. Cite sources by copying the exact citation tags attached to context snippets "
+            "(example: [README.md:abc123:0]). Do NOT output the placeholder [doc_name:doc_id:chunk_index].\n\n"
+            "If no relevant context is provided or found, you MUST respond: \"I don't have that information\""
+        )
+        
+        # Replace or inject system prompt
+        system_messages = [m for m in base_messages if m.get("role") == "system"]
+        if not system_messages:
+            base_messages.insert(0, {"role": "system", "content": assistant_system_prompt})
+        else:
+            base_messages[0]["content"] = assistant_system_prompt
+        
+        # Force RAG retrieval (even if RAG_ENABLED=false)
         user_messages = [m for m in base_messages if m.get("role") == "user"]
         if user_messages:
+            query = user_messages[-1].get("content", "")
+            if query and query.strip():
+                logger.info(f"Assistant Mode (stream): forcing RAG retrieval for query (len={len(query)})")
+                chunks = await retrieve_chunks(
+                    query=query,
+                    top_k=settings.rag_top_k,
+                    base_url=settings.chunkenizer_api_url,
+                )
+                
+                if not chunks:
+                    # No chunks found - yield error response
+                    logger.warning("Assistant Mode (stream): no RAG chunks found, yielding error response")
+                    error_response = {
+                        "choices": [{
+                            "delta": {"content": "I don't have that information"},
+                            "index": 0,
+                            "finish_reason": "stop"
+                        }],
+                        "model": payload.model or settings.model,
+                        "id": "assistant-mode-no-context"
+                    }
+                    yield error_response
+                    return
+
+                # Assistant Mode (stream): apply a more permissive similarity filter (with fallback).
+                assistant_threshold = getattr(settings, "assistant_rag_min_similarity", 0.0)
+                filtered_chunks, filter_meta = filter_by_similarity(
+                    chunks,
+                    threshold=assistant_threshold,
+                    min_chunks=settings.rag_min_chunks,
+                )
+                
+                # Chunks found - inject with strict instructions
+                context = build_context_block(filtered_chunks, settings.rag_max_context_chars)
+                base_messages = inject_rag_context_strict(base_messages, context)
+                
+                logger.info(
+                    "Assistant Mode (stream): injected chunks initial=%d filtered=%d final=%d threshold=%.3f",
+                    len(chunks),
+                    filter_meta.get("filtered_count", len(filtered_chunks)),
+                    len(filtered_chunks),
+                    assistant_threshold,
+                )
+        
+        # Skip Developer Assistant Mode and proceed to streaming
+        # (messages are already prepared with strict RAG context)
+    else:
+        # Developer assistant mode: detect project questions and /help command
+        if settings.dev_assistant_mode:
+            user_messages = [m for m in base_messages if m.get("role") == "user"]
+        if settings.dev_assistant_mode and user_messages:
             user_query = user_messages[-1].get("content", "")
             if user_query and user_query.strip():
                 # Check for /review command

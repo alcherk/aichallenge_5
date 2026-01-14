@@ -48,6 +48,11 @@ class Settings:
         # RAG second-stage filtering and reranking
         self.rag_min_similarity: float = float(os.getenv("RAG_MIN_SIMILARITY", "0.0"))
         self.rag_min_chunks: int = int(os.getenv("RAG_MIN_CHUNKS", "2"))
+        # Assistant Mode: use a (typically lower) similarity threshold to be more permissive.
+        # Default 0.0 keeps behavior recall-friendly and avoids filtering out everything if scores are missing.
+        self.assistant_rag_min_similarity: float = float(
+            os.getenv("ASSISTANT_RAG_MIN_SIMILARITY", "0.0")
+        )
         rag_reranker_enabled_str = os.getenv("RAG_RERANKER_ENABLED", "false").strip().lower()
         self.rag_reranker_enabled: bool = rag_reranker_enabled_str in {"1", "true", "yes", "y", "on"}
         self.rag_reranker_type: str = os.getenv("RAG_RERANKER_TYPE", "noop").strip().lower()

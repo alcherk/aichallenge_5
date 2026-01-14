@@ -20,6 +20,7 @@ export interface Settings {
   mcpEnabled: boolean;
   mcpConfigPath: string;
   workspaceRoot: string;
+  assistantMode: boolean;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `Ты помощник-прокси между пользователем и системой.
@@ -45,6 +46,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mcpEnabled: false,
   mcpConfigPath: '',
   workspaceRoot: '',
+  assistantMode: false,
 };
 
 export const MODEL_PRICING: Record<ModelName, ModelPricing> = {
