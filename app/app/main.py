@@ -21,7 +21,18 @@ from .mcp.manager import ensure_mcp_manager, get_mcp_manager
 
 settings = get_settings()
 _level = getattr(logging, str(getattr(settings, "log_level", "INFO")).upper(), logging.INFO)
-logging.basicConfig(level=_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+# Configure logging to ensure output to console even under uvicorn
+logging.basicConfig(
+    level=_level,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    force=True,  # Override any existing configuration
+)
+
+# Explicitly set level for our app loggers to ensure they output
+for logger_name in ["app", "app.tasks", "app.rag", "app.mcp"]:
+    logging.getLogger(logger_name).setLevel(_level)
+
 logger = logging.getLogger("app")
 app = FastAPI(title="ChatGPT Proxy Service")
 

@@ -11,6 +11,8 @@ Modern FastAPI-based proxy service with React + TypeScript frontend. Forwards re
 - ✅ `POST /api/chat/stream` - Server-Sent Events (SSE) streaming
 - ✅ CORS enabled for development
 - ✅ Multi-stage Docker build
+- ✅ **Task Management:** `/tasks`, `/add`, `/status`, `/priority` commands
+- ✅ **Developer Commands:** `/help`, `/review` for code assistance
 
 ### Frontend (React + TypeScript)
 - ✅ Real-time chat with SSE streaming
@@ -268,7 +270,7 @@ The assistant will:
 
 ### Developer Commands
 
-The service provides two special commands for developer assistance: `/help` and `/review`.
+The service provides special commands for developer assistance (`/help`, `/review`) and task management (`/tasks`, `/add`, `/status`, `/priority`).
 
 #### `/help` Command
 
@@ -394,6 +396,138 @@ Assistant:
 - Project documentation should be indexed (see [Auto-Indexing Project Code](#auto-indexing-project-code))
 
 **Note:** If there are no issues found, the review will simply state that the code looks good.
+
+### Task Management Commands
+
+The service includes a built-in task management system that stores tasks in `todo.md` file. Tasks can be managed via slash commands or natural language.
+
+#### `/tasks` Command
+
+List all tasks with optional filtering.
+
+**Usage:**
+```
+/tasks                 # List all tasks
+/tasks high            # Filter by priority (high/medium/low)
+/tasks in_progress     # Filter by status (todo/in_progress/done)
+/tasks @alex           # Filter by assignee
+```
+
+**Example Output:**
+```
+- [ ] Fix authentication bug (high, @alex, due: 2026-01-20)
+- [ ] Update documentation (medium, @bob, in_progress)
+- [x] Setup CI/CD pipeline (low, @alex)
+```
+
+#### `/add` Command
+
+Create a new task with required fields.
+
+**Usage:**
+```
+/add <title> @<assignee> <priority> [due:YYYY-MM-DD]
+```
+
+**Examples:**
+```
+/add Fix login bug @alex high
+/add Update README @bob medium due:2026-01-25
+/add Refactor API @frontend low due:2026-02-01
+```
+
+**Required fields:**
+- `title` - Task description
+- `@assignee` - Person responsible (with @ prefix)
+- `priority` - One of: `high`, `medium`, `low`
+
+**Optional fields:**
+- `due:YYYY-MM-DD` - Deadline in ISO format
+
+#### `/status` Command
+
+Show project status summary with task statistics, Git context, and risk analysis.
+
+**Usage:**
+```
+/status
+```
+
+**Example Output:**
+```
+## Статус проекта
+
+**Задачи:**
+- Todo: 12
+- In progress: 3
+- Done: 5
+
+**Git:**
+- Ветка: feature/task-management
+- Последний коммит: Add task commands
+- Измененные файлы: 4
+
+**Риски:**
+⚠️ 2 задач просрочено (Fix auth bug, Update docs)
+⚠️ 3 задач с дедлайном в ближайшие 3 дня
+```
+
+#### `/priority` Command
+
+Get prioritized task recommendations based on deadlines and priority levels.
+
+**Usage:**
+```
+/priority
+```
+
+**Example Output:**
+```
+1. Fix authentication bug (@alex, просрочено!, high priority)
+2. Update documentation (@bob, дедлайн сегодня, medium priority)
+3. Refactor API layer (@frontend, через 2 дн., high priority)
+```
+
+**Sorting logic:**
+1. Overdue tasks first
+2. Then by priority (high → medium → low)
+3. Then by deadline (soonest first)
+
+#### Natural Language Support
+
+Task commands also work with natural language (Russian and English):
+
+| Natural Language | Command |
+|-----------------|---------|
+| "покажи все задачи" / "show all tasks" | `/tasks` |
+| "создай задачу" / "create task" | `/add` (via LLM) |
+| "какой статус проекта" / "project status" | `/status` |
+| "что делать первым" / "what to do first" | `/priority` |
+| "закрой задачу X" / "close task X" | Update status to done |
+| "удали задачу X" / "delete task X" | Delete (with confirmation) |
+
+#### Task File Format
+
+Tasks are stored in `todo.md` with the following format:
+
+```markdown
+# Tasks
+
+## [high] Fix authentication bug (id:a1b2c3d4, @alex, due:2026-01-20)
+
+Description of the task goes here.
+
+## [medium] Update documentation (id:e5f6a7b8, @bob, status:in_progress)
+
+Another task description.
+```
+
+**Task metadata:**
+- `[priority]` - high, medium, or low
+- `id:xxxxxxxx` - Unique 8-character hex ID
+- `@assignee` - Person responsible
+- `due:YYYY-MM-DD` - Optional deadline
+- `status:xxx` - todo (default), in_progress, or done
 
 ### Auto-Indexing Project Code
 

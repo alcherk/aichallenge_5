@@ -16,7 +16,24 @@ from ..rag.context_builder import build_context_block
 from ..rag.prompt_injector import inject_rag_context, inject_rag_context_strict
 from ..rag.filter import filter_by_similarity
 from ..rag.reranker import get_reranker
-from ..rag.project_detector import is_project_question, extract_help_query, extract_review_query, build_review_rag_queries
+from ..rag.project_detector import (
+    is_project_question,
+    extract_help_query,
+    extract_review_query,
+    build_review_rag_queries,
+    is_task_command,
+    parse_task_command,
+    TaskCommandInfo,
+)
+from ..tasks.commands import (
+    CommandResult,
+    handle_tasks_command,
+    handle_add_command,
+    handle_status_command,
+    handle_priority_command,
+    handle_task_update,
+    handle_task_delete,
+)
 from ..rag.git_context import get_git_context, format_git_context, get_review_diff
 from ..rag.context_builder import build_review_context
 
@@ -425,6 +442,255 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
         # Skip Developer Assistant Mode and proceed to LLM call
         # (messages are already prepared with strict RAG context)
     else:
+        # Check for task management commands first
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        if user_messages:
+            user_query = user_messages[-1].get("content", "")
+            task_cmd = parse_task_command(user_query) if user_query else None
+
+            if task_cmd:
+                logger.info(f"Task command detected: {task_cmd.command} args={task_cmd.args}")
+
+                # Get MCP manager for task operations
+                mcp_mgr = await ensure_mcp_manager(
+                    mcp_config_path=(
+                        payload.mcp_config_path or settings.mcp_config_path or None
+                    ),
+                    workspace_root=Path(payload.workspace_root or settings.workspace_root),
+                )
+
+                if mcp_mgr is None:
+                    return ChatResponse(
+                        id="task-error",
+                        model=payload.model or settings.openai_model,
+                        choices=[{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Ошибка: MCP не инициализирован. Проверьте настройки."},
+                            "finish_reason": "stop",
+                        }],
+                    ), {"task_command": task_cmd.command, "error": "MCP not initialized"}
+
+                workspace = Path(payload.workspace_root or settings.workspace_root)
+                result = None
+
+                # Handle different task commands
+                if task_cmd.command == "tasks":
+                    result = await handle_tasks_command(
+                        mcp_mgr,
+                        workspace,
+                        filter_priority=task_cmd.args.get("filter_priority"),
+                        filter_status=task_cmd.args.get("filter_status"),
+                        filter_assignee=task_cmd.args.get("filter_assignee"),
+                    )
+
+                elif task_cmd.command == "add":
+                    # Check for required fields
+                    if not task_cmd.args.get("title"):
+                        result_msg = "Ошибка: укажите название задачи. Пример: /add Fix bug @alex high"
+                        return ChatResponse(
+                            id="task-add-error",
+                            model=payload.model or settings.openai_model,
+                            choices=[{"index": 0, "message": {"role": "assistant", "content": result_msg}, "finish_reason": "stop"}],
+                        ), {"task_command": "add", "error": "missing title"}
+
+                    if not task_cmd.args.get("priority"):
+                        result_msg = "Ошибка: укажите приоритет (high/medium/low). Пример: /add Fix bug @alex high"
+                        return ChatResponse(
+                            id="task-add-error",
+                            model=payload.model or settings.openai_model,
+                            choices=[{"index": 0, "message": {"role": "assistant", "content": result_msg}, "finish_reason": "stop"}],
+                        ), {"task_command": "add", "error": "missing priority"}
+
+                    if not task_cmd.args.get("assignee"):
+                        result_msg = "Ошибка: укажите исполнителя (@username). Пример: /add Fix bug @alex high"
+                        return ChatResponse(
+                            id="task-add-error",
+                            model=payload.model or settings.openai_model,
+                            choices=[{"index": 0, "message": {"role": "assistant", "content": result_msg}, "finish_reason": "stop"}],
+                        ), {"task_command": "add", "error": "missing assignee"}
+
+                    result = await handle_add_command(
+                        mcp_mgr,
+                        workspace,
+                        title=task_cmd.args["title"],
+                        priority=task_cmd.args["priority"],
+                        assignee=task_cmd.args["assignee"],
+                        deadline=task_cmd.args.get("deadline"),
+                    )
+
+                elif task_cmd.command == "status":
+                    # Get git context for status
+                    git_ctx = None
+                    try:
+                        git_ctx = await get_git_context(mcp_mgr, workspace)
+                    except Exception as e:
+                        logger.warning(f"Failed to get git context for status: {e}")
+
+                    result = await handle_status_command(mcp_mgr, workspace, git_context=git_ctx)
+
+                elif task_cmd.command == "priority":
+                    result = await handle_priority_command(mcp_mgr, workspace)
+
+                elif task_cmd.command == "update":
+                    result = await handle_task_update(
+                        mcp_mgr,
+                        workspace,
+                        query=task_cmd.args.get("query", ""),
+                        new_status=task_cmd.args.get("new_status"),
+                    )
+
+                elif task_cmd.command == "delete":
+                    # Check if this is a confirmation
+                    # For now, we'll ask for confirmation first
+                    result = await handle_task_delete(
+                        mcp_mgr,
+                        workspace,
+                        query=task_cmd.args.get("query", ""),
+                        confirmed=False,
+                    )
+
+                elif task_cmd.command == "add_nl":
+                    # Natural language add - try to parse structured format first
+                    raw_query = task_cmd.args.get("raw_query", "")
+
+                    # Try to extract structured fields: title:X, priority:Y, assignee:Z
+                    import re
+                    title_match = re.search(r'title[:\s]+([^,]+?)(?:,|priority|assignee|due|$)', raw_query, re.IGNORECASE)
+                    priority_match = re.search(r'priority[:\s]+(high|medium|low)', raw_query, re.IGNORECASE)
+                    assignee_match = re.search(r'(?:assignee[:\s]+@?|@)(\w+)', raw_query, re.IGNORECASE)
+                    deadline_match = re.search(r'(?:due|deadline)[:\s]+(\d{4}-\d{2}-\d{2})', raw_query, re.IGNORECASE)
+
+                    title = title_match.group(1).strip() if title_match else None
+                    priority = priority_match.group(1).lower() if priority_match else None
+                    assignee = assignee_match.group(1) if assignee_match else None
+                    deadline = deadline_match.group(1) if deadline_match else None
+
+                    logger.info(f"add_nl parsed: title={title}, priority={priority}, assignee={assignee}, deadline={deadline}")
+
+                    if title and priority and assignee:
+                        # All required fields present - create task directly
+                        result = await handle_add_command(
+                            mcp_mgr,
+                            workspace,
+                            title=title,
+                            priority=priority,
+                            assignee=assignee,
+                            deadline=deadline,
+                        )
+                    else:
+                        # Missing fields - ask user via LLM
+                        missing = []
+                        if not title:
+                            missing.append("название (title)")
+                        if not priority:
+                            missing.append("приоритет (priority: high/medium/low)")
+                        if not assignee:
+                            missing.append("исполнитель (@username)")
+
+                        result = CommandResult(
+                            success=False,
+                            message=f"Для создания задачи укажите: {', '.join(missing)}.\n\n"
+                                    f"Пример: создай задачу title: Исправить баг, priority: high, assignee: @alex"
+                        )
+
+                elif task_cmd.command == "task_query":
+                    # Question about tasks - load tasks and let LLM answer
+                    from ..tasks.commands import read_tasks_file
+                    tasks, error = await read_tasks_file(mcp_mgr, workspace)
+
+                    if error:
+                        result = CommandResult(
+                            success=False,
+                            message=f"Ошибка чтения задач: {error}"
+                        )
+                    elif not tasks:
+                        result = CommandResult(
+                            success=True,
+                            message="Задач пока нет. Создайте задачи с помощью команды /add или 'создай задачу'."
+                        )
+                    else:
+                        # Format tasks as context for LLM
+                        from datetime import date
+                        today = date.today().isoformat()
+
+                        task_lines = []
+                        for t in tasks:
+                            status_emoji = "✅" if t.status == "done" else ("🔄" if t.status == "in_progress" else "📋")
+                            overdue = "⚠️ ПРОСРОЧЕНО" if t.is_overdue() else ""
+                            days = t.days_until_deadline()
+                            deadline_info = ""
+                            if t.deadline:
+                                if days is not None:
+                                    if days < 0:
+                                        deadline_info = f"(просрочено на {-days} дн.)"
+                                    elif days == 0:
+                                        deadline_info = "(дедлайн сегодня!)"
+                                    elif days <= 3:
+                                        deadline_info = f"(через {days} дн.)"
+                                    else:
+                                        deadline_info = f"(до {t.deadline})"
+
+                            task_lines.append(
+                                f"{status_emoji} [{t.priority.upper()}] {t.title} | "
+                                f"@{t.assignee} | статус: {t.status} {deadline_info} {overdue}"
+                            )
+
+                        task_context = "\n".join(task_lines)
+
+                        # Count statistics
+                        total = len(tasks)
+                        by_status = {"todo": 0, "in_progress": 0, "done": 0}
+                        by_priority = {"high": 0, "medium": 0, "low": 0}
+                        overdue_count = 0
+                        for t in tasks:
+                            by_status[t.status] = by_status.get(t.status, 0) + 1
+                            by_priority[t.priority] = by_priority.get(t.priority, 0) + 1
+                            if t.is_overdue():
+                                overdue_count += 1
+
+                        stats = (
+                            f"Всего: {total} | "
+                            f"Todo: {by_status['todo']}, In Progress: {by_status['in_progress']}, Done: {by_status['done']} | "
+                            f"High: {by_priority['high']}, Medium: {by_priority['medium']}, Low: {by_priority['low']}"
+                        )
+                        if overdue_count > 0:
+                            stats += f" | ⚠️ Просрочено: {overdue_count}"
+
+                        task_system_prompt = f"""Ты помощник по управлению задачами. Сегодня {today}.
+
+ТЕКУЩИЕ ЗАДАЧИ:
+{task_context}
+
+СТАТИСТИКА:
+{stats}
+
+Ответь на вопрос пользователя о задачах. Будь конкретен:
+- Если спрашивают о приоритетных задачах - отсортируй по приоритету и дедлайну
+- Если спрашивают о просроченных - покажи только просроченные
+- Если спрашивают чьи задачи - фильтруй по исполнителю
+- Объясни свой ответ (почему эта задача важнее/срочнее)
+- Используй эмодзи для наглядности
+
+Отвечай на языке вопроса (русский/английский)."""
+
+                        # Inject task context and continue to LLM
+                        messages.insert(0, {"role": "system", "content": task_system_prompt})
+                        logger.info(f"task_query: loaded {len(tasks)} tasks as context")
+                        # Don't set result - continue to LLM call
+                        result = None
+
+                # If we have a result, return it directly
+                if result is not None:
+                    return ChatResponse(
+                        id="task-response",
+                        model=payload.model or settings.openai_model,
+                        choices=[{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": result.message},
+                            "finish_reason": "stop",
+                        }],
+                    ), {"task_command": task_cmd.command, "success": result.success}
+
         # Developer assistant mode: detect project questions and /help command
         if settings.dev_assistant_mode:
             user_messages = [m for m in messages if m.get("role") == "user"]

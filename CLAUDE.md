@@ -4,133 +4,204 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A FastAPI-based ChatGPT proxy service with a web UI that runs in Docker on port 8333. The service forwards chat requests to the OpenAI API and provides both streaming (SSE) and non-streaming endpoints.
+A FastAPI-based ChatGPT proxy service with RAG (Retrieval-Augmented Generation), MCP (Model Context Protocol) tools, and a React + TypeScript frontend. Runs in Docker on port 8333.
 
 ## Development Commands
 
-### Local Development (without Docker)
+### Backend Development
 
 ```bash
-# Setup virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install --upgrade pip
+# Setup and run
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Set required environment variables
-export OPENAI_API_KEY="your-api-key-here"
-export OPENAI_MODEL="gpt-4o-mini"  # optional
-
-# Run the development server
-uvicorn app.app.main:app --host 0.0.0.0 --port 8333 --reload
+export OPENAI_API_KEY="your-key"
+uvicorn app.app.main:app --reload --port 8333
 ```
 
-### Docker Development
+### Frontend Development
 
 ```bash
-# Build the image
+cd frontend
+npm install
+npm run dev      # Dev server on port 5173 (proxies to backend)
+npm run build    # Production build to frontend/dist/
+npm run lint     # ESLint
+```
+
+### Docker
+
+```bash
 docker build -t chatgpt-proxy .
-
-# Run the container
-docker run -d \
-  --name chatgpt-proxy \
-  -e OPENAI_API_KEY="your-api-key-here" \
-  -e OPENAI_MODEL="gpt-4o-mini" \
-  -p 8333:8333 \
-  chatgpt-proxy
-
-# Or use docker-compose
-export OPENAI_API_KEY="your-api-key-here"
 docker compose up -d --build
+```
+
+### RAG Setup (Optional)
+
+```bash
+# Start Chunkenizer (required for RAG)
+cd ../Chunkenizer && docker-compose up -d
+
+# Index project files for /help and /review commands
+python scripts/auto_index_project.py --full-scan
 ```
 
 ## Architecture
 
+### Dual Frontend Architecture
+
+The app serves different frontends based on build availability:
+- **Production**: React SPA from `frontend/dist/` (built into Docker image)
+- **Legacy fallback**: Jinja2 templates from `app/app/templates/` (when `frontend/dist/` doesn't exist)
+
+Detection in `main.py:37-46`:
+```python
+frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
+use_react_frontend = frontend_dist.exists()
+```
+
 ### Request Flow
 
-1. **Non-streaming**: `POST /api/chat` -> `call_chatgpt()` -> Returns complete `StructuredResponse`
-2. **Streaming**: `POST /api/chat/stream` -> `stream_chatgpt()` -> Returns SSE events (chunk/done/error)
+```
+POST /api/chat → call_chatgpt() → [RAG retrieval] → [MCP tools] → OpenAI Responses API → StructuredResponse
+POST /api/chat/stream → stream_chatgpt() → [RAG retrieval] → SSE events (chunk/done/error)
+```
 
-### Key Components
+### Key Backend Components
 
-- **app/app/main.py**: FastAPI application with three main endpoints:
-  - `GET /health`: Health check
-  - `GET /`: Serves the web UI (chat.html)
-  - `POST /api/chat`: Non-streaming chat completions (returns StructuredResponse)
-  - `POST /api/chat/stream`: SSE streaming endpoint for incremental responses
+| File | Purpose |
+|------|---------|
+| `app/app/main.py` | FastAPI app, endpoints, SSE streaming |
+| `app/app/services/chatgpt_client.py` | `call_chatgpt()`, `stream_chatgpt()`, OpenAI API integration |
+| `app/app/config.py` | Settings class with `@lru_cache()` |
+| `app/app/schemas.py` | Pydantic models: `ChatRequest`, `StructuredResponse` |
+| `app/app/rag/` | RAG subsystem (chunkenizer adapter, context builder, prompt injection) |
+| `app/app/mcp/` | MCP subsystem (manager, transports, builtin servers) |
 
-- **app/app/services/chatgpt_client.py**: OpenAI API integration
-  - `call_chatgpt()`: Non-streaming requests using httpx.AsyncClient
-  - `stream_chatgpt()`: Streaming generator that yields JSON chunks from SSE stream
-  - Both functions inject a Russian system prompt if none is present in the messages
+### RAG Subsystem (`app/app/rag/`)
 
-- **app/app/config.py**: Environment-based configuration using a lightweight Settings class (not pydantic-settings)
-  - Cached with `@lru_cache()` to avoid repeated parsing
+- **chunkenizer_adapter.py**: `retrieve_chunks()` calls Chunkenizer's `/search` endpoint
+- **context_builder.py**: `build_context_block()` formats chunks with citations like `[doc_name:doc_id:chunk_index]`
+- **prompt_injector.py**: `inject_rag_context()` and `inject_rag_context_strict()` (for Assistant Mode)
+- **filter.py**: `filter_by_similarity()` applies threshold filtering with fallback
+- **project_detector.py**: Detects `/help` and `/review` commands, project-related questions
+- **git_context.py**: `get_git_context()`, `get_review_diff()` for code review
 
-- **app/app/schemas.py**: Pydantic models
-  - `ChatMessage`, `ChatRequest`, `ChatResponse`, `ChatChoice`, `ChatUsage`
-  - `StructuredResponse`: Consistent envelope for API responses with success/error handling
+### MCP Subsystem (`app/app/mcp/`)
 
-- **Frontend (app/app/static/ and app/app/templates/)**:
-  - `chat.html`: Single-page UI with Jinja2 templating
-  - `chat.js`: Vanilla JS for message handling, uses EventSource for SSE streaming
-  - `styles.css`: Chat UI styling
-  - Conversation history stored in browser localStorage
+Three builtin servers are always available (no config needed):
+1. **builtin_filesystem**: Read/write files within workspace
+2. **builtin_fetch**: HTTP fetch with content extraction
+3. **builtin_git**: Git operations (diff, status, log)
+
+Additional servers can be added via `MCP_CONFIG_PATH`.
+
+Tool naming: `mcp_{server_name}__{tool_name}` (e.g., `mcp_builtin_git__git_diff`)
+
+### Frontend Architecture (React + TypeScript)
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/store/` | Zustand stores: `chatStore`, `settingsStore`, `metricsStore` |
+| `src/services/` | API client (`api.ts`), SSE streaming (`streaming.ts`), localStorage (`storage.ts`) |
+| `src/components/` | React components organized by feature |
+| `src/types/` | TypeScript interfaces |
+
+State management uses Zustand with localStorage persistence.
+
+## Developer Commands
+
+### `/help <question>`
+
+Searches project docs/code via RAG:
+```
+/help how is RAG implemented
+/help where is ChatRequest defined
+```
+
+Uses doubled `top_k` for broader search. Responds with file paths, class names, code examples.
+
+### `/review [commit]`
+
+Code review as Staff Engineer:
+```
+/review              # Review uncommitted changes
+/review commit       # Review HEAD
+/review HEAD~1       # Review previous commit
+/review abc123       # Review specific commit
+```
+
+Categories checked: Architecture, Code Style, Bugs, Performance, Security
+
+## Environment Variables
+
+### Required
+- `OPENAI_API_KEY`
+
+### API Configuration
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
+- `OPENAI_API_BASE` (default: `https://api.openai.com/v1`)
+- `OPENAI_CHAT_PATH` (default: `responses`) - path appended to base
+
+### RAG Configuration
+- `RAG_ENABLED` (default: `true`)
+- `RAG_TOP_K` (default: `5`)
+- `RAG_MAX_CONTEXT_CHARS` (default: `8000`)
+- `CHUNKENIZER_API_URL` (default: `http://localhost:8000`)
+- `RAG_MIN_SIMILARITY` (default: `0.0`) - filter threshold
+- `RAG_RERANKER_ENABLED` (default: `false`)
+
+### MCP Configuration
+- `MCP_CONFIG_PATH` - path to JSON config for additional MCP servers
+- `WORKSPACE_ROOT` (default: repo root) - constrains filesystem tools
+
+## Implementation Notes
 
 ### System Prompt Injection
 
-Both `call_chatgpt()` and `stream_chatgpt()` automatically inject a Russian-language system prompt if no system message is present in the request. The prompt instructs the assistant to understand tasks first, ask clarifying questions, and respond in Markdown format.
+Both `call_chatgpt()` and `stream_chatgpt()` inject a Russian system prompt if none is present. When modifying:
+- Non-streaming: `chatgpt_client.py:149-162` (`_prepare_messages`)
+- Streaming: Same function, shared logic
 
-### Environment Variables
+Special prompts for `/review` (Staff Engineer), `/help` (code search), and Assistant Mode (strict RAG-only) are injected separately in the main functions.
 
-Required:
-- `OPENAI_API_KEY`: Your OpenAI API key
+### Responses API Usage
 
-Optional:
-- `OPENAI_MODEL` (default: "gpt-4o-mini")
-- `OPENAI_API_BASE` (default: "https://api.openai.com/v1")
-- `REQUEST_TIMEOUT_SECONDS` (default: 60)
-- `APP_HOST` (default: "0.0.0.0")
-- `APP_PORT` (default: 8333)
+The service uses OpenAI's newer Responses API (`/v1/responses`) instead of Chat Completions:
+- Set via `OPENAI_CHAT_PATH=responses` (default)
+- Handles tool calls via `previous_response_id` continuation
+- Helper functions: `_tools_to_responses_api()`, `_extract_text_from_responses()`
 
 ### Error Handling
 
-All endpoints return consistent structured responses via `StructuredResponse`:
-- Success: `success=True`, `data=ChatResponse`, `metadata` includes processing time and token usage
-- Failure: `success=False`, `error` dict with type and detail, HTTP status preserved
+All endpoints return `StructuredResponse`:
+```python
+{
+    "success": bool,
+    "status_code": int,
+    "message": str,
+    "data": ChatResponse | None,
+    "error": {"type": str, "detail": str} | None,
+    "metadata": {"timestamp": float, "rag": dict, ...}
+}
+```
 
-The streaming endpoint emits SSE events:
-- `event: chunk` with `{"delta": "..."}` for incremental text
-- `event: done` with full StructuredResponse-like payload
-- `event: error` with error details
+### SSE Streaming Format
 
-### CORS and Static Files
+```
+event: chunk
+data: {"delta": "partial text..."}
 
-- CORS enabled for all origins (`allow_origins=["*"]`)
-- Static files mounted at `/static` (serves from `app/app/static/`)
-- Templates loaded from `app/app/templates/`
-- Cache-busting via timestamp query parameter in template rendering
+event: done
+data: {StructuredResponse}
 
-## Important Implementation Notes
+event: error
+data: {StructuredResponse with success=false}
+```
 
-### Adding Features
+## Testing
 
-- Conversation history is currently client-side only (localStorage). To add server-side persistence, introduce a conversation_id and database storage in `/api/chat` endpoint.
-- Authentication is not implemented. To add auth, wrap routes with FastAPI dependencies (OAuth2, JWT, or session-based).
-- The UI only sends `messages` to the backend. To expose additional parameters (temperature, max_tokens), extend the form in chat.js.
-
-### Modifying the System Prompt
-
-System prompts are injected in two places:
-- `app/app/services/chatgpt_client.py:30-43` (non-streaming)
-- `app/app/services/chatgpt_client.py:103-117` (streaming)
-
-If you modify the prompt, update both locations to maintain consistency.
-
-### Working with Static Assets
-
-Static files (chat.js, styles.css) are served from `app/app/static/`. The FastAPI app uses `StaticFiles` to mount this directory at `/static`, so updates to CSS/JS files require a server restart when running with `--reload` or a browser cache clear.
-
-### Docker Deployment
-
-The Dockerfile uses Python 3.11-slim and exposes port 8333. The CMD runs Uvicorn directly without `--reload`. For VPS deployment, use `--restart unless-stopped` to ensure the container restarts after crashes or reboots.
+```bash
+pytest                           # Run all tests
+pytest tests/test_api.py -v      # Specific test file
+pytest -k "test_chat"            # Pattern match
+```
