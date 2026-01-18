@@ -7,7 +7,12 @@
       "Bash(python:*)",
       "Bash(source .venv/bin/activate)",
       "Bash(chmod:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ssh root@69.62.64.218 'cd /root/aichallenge_5 && git pull origin main')",
+      "Bash(ssh root@69.62.64.218 'cd /root/aichallenge_5 && docker compose build --no-cache 2>&1')",
+      "Bash(ssh root@69.62.64.218:*)"
     ]
   }
 }
