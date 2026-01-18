@@ -1,5 +1,5 @@
 # Multi-stage build: Frontend (React + TypeScript)
-FROM node:18-slim AS frontend-builder
+FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/frontend
 
@@ -38,5 +38,9 @@ ENV APP_HOST=0.0.0.0 \
     APP_PORT=8333
 
 EXPOSE 8333
+
+# Health check for container orchestration
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8333/health')" || exit 1
 
 CMD ["uvicorn", "app.app.main:app", "--host", "0.0.0.0", "--port", "8333"]

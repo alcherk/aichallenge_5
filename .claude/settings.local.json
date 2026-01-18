@@ -5,7 +5,9 @@
       "Bash(npm run build:*)",
       "Bash(npm install:*)",
       "Bash(python:*)",
-      "Bash(source .venv/bin/activate)"
+      "Bash(source .venv/bin/activate)",
+      "Bash(chmod:*)",
+      "Bash(git add:*)"
     ]
   }
 }

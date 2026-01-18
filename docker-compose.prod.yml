@@ -1,0 +1,27 @@
+# Production docker-compose for VPS deployment
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  chatgpt-proxy:
+    image: ${DOCKER_USERNAME:-your-username}/chatgpt-proxy:${IMAGE_TAG:-latest}
+    container_name: chatgpt-proxy
+    restart: unless-stopped
+    ports:
+      - "8333:8333"
+    env_file:
+      - .env
+    environment:
+      - RAG_ENABLED=false
+      - APP_HOST=0.0.0.0
+      - APP_PORT=8333
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8333/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

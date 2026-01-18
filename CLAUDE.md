@@ -205,3 +205,23 @@ pytest                           # Run all tests
 pytest tests/test_api.py -v      # Specific test file
 pytest -k "test_chat"            # Pattern match
 ```
+
+## Deployment
+
+### `/deploy` Command
+
+When the user types `/deploy` in chat, Claude should execute the deployment pipeline:
+
+1. **Git push**: Add, commit (if changes), and push to main
+2. **SSH to server**: Connect to `root@69.62.64.218`
+3. **Pull changes**: `cd /root/aichallenge_5 && git pull`
+4. **Rebuild**: `docker compose build`
+5. **Restart**: `docker compose up -d --force-recreate`
+6. **Health check**: Verify `/health` endpoint responds
+
+Script location: `scripts/deploy.sh`
+
+Manual execution:
+```bash
+./scripts/deploy.sh
+```
