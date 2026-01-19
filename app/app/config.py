@@ -64,6 +64,13 @@ class Settings:
         self.dev_assistant_mode: bool = dev_assistant_mode_str in {"1", "true", "yes", "y", "on"}
         self.rag_project_docs_collection: str = os.getenv("RAG_PROJECT_DOCS_COLLECTION", "documents").strip()
 
+        # Ollama (local LLM) configuration
+        ollama_enabled_str = os.getenv("OLLAMA_ENABLED", "true").strip().lower()
+        self.ollama_enabled: bool = ollama_enabled_str in {"1", "true", "yes", "y", "on"}
+        self.ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").strip()
+        self.ollama_default_model: str = os.getenv("OLLAMA_DEFAULT_MODEL", "qwen2.5:14b").strip()
+        self.ollama_timeout: int = int(os.getenv("OLLAMA_TIMEOUT", "120"))
+
 
 @lru_cache()
 def get_settings() -> Settings:
