@@ -7,9 +7,21 @@ export type ModelName =
   | 'gpt-4o-mini'
   | 'gpt-3.5-turbo';
 
+export type ModelProvider = 'cloud' | 'local';
+
 export interface ModelPricing {
   input: number;  // per 1M tokens
   output: number; // per 1M tokens
+}
+
+export interface LocalModelSettings {
+  enabled: boolean;
+  provider: ModelProvider;
+  model: string;
+  ragEnabled: boolean;
+  temperature: number;
+  topP: number;
+  maxTokens: number;
 }
 
 export interface Settings {
@@ -21,6 +33,7 @@ export interface Settings {
   mcpConfigPath: string;
   workspaceRoot: string;
   assistantMode: boolean;
+  localModel: LocalModelSettings;
 }
 
 export const DEFAULT_SYSTEM_PROMPT = `Ты помощник-прокси между пользователем и системой.
@@ -38,6 +51,16 @@ export const DEFAULT_SYSTEM_PROMPT = `Ты помощник-прокси меж�
 - Когда считаешь, что вопросов достаточно, предоставь итоговый ответ.
 - Используй Markdown для форматирования (заголовки, списки, код и т.д.).`;
 
+export const DEFAULT_LOCAL_MODEL_SETTINGS: LocalModelSettings = {
+  enabled: false,
+  provider: 'cloud',
+  model: 'qwen2.5:14b',
+  ragEnabled: true,
+  temperature: 0.7,
+  topP: 0.9,
+  maxTokens: 2048,
+};
+
 export const DEFAULT_SETTINGS: Settings = {
   systemPrompt: DEFAULT_SYSTEM_PROMPT,
   temperature: 0.7,
@@ -47,6 +70,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mcpConfigPath: '',
   workspaceRoot: '',
   assistantMode: false,
+  localModel: DEFAULT_LOCAL_MODEL_SETTINGS,
 };
 
 export const MODEL_PRICING: Record<ModelName, ModelPricing> = {

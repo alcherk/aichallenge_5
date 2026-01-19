@@ -1,8 +1,8 @@
 // Settings state management with Zustand
 
 import { create } from 'zustand';
-import type { Settings, ModelName } from '@/types';
-import { DEFAULT_SETTINGS } from '@/types';
+import type { Settings, ModelName, LocalModelSettings } from '@/types';
+import { DEFAULT_SETTINGS, DEFAULT_LOCAL_MODEL_SETTINGS } from '@/types';
 import { settingsStorage } from '@/services/storage';
 
 interface SettingsState extends Settings {
@@ -17,6 +17,12 @@ interface SettingsState extends Settings {
   setAssistantMode: (enabled: boolean) => void;
   resetToDefaults: () => void;
   loadFromStorage: () => void;
+  // Local model actions
+  setLocalModelSetting: <K extends keyof LocalModelSettings>(
+    key: K,
+    value: LocalModelSettings[K]
+  ) => void;
+  resetLocalModelSettings: () => void;
 }
 
 export const useSettingsStore = create<SettingsState>((set) => ({
@@ -70,5 +76,18 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   loadFromStorage: () => {
     const settings = settingsStorage.get();
     set(settings);
+  },
+
+  setLocalModelSetting: (key, value) => {
+    set((state) => {
+      const newLocalModel = { ...state.localModel, [key]: value };
+      settingsStorage.setLocalModel(newLocalModel);
+      return { localModel: newLocalModel };
+    });
+  },
+
+  resetLocalModelSettings: () => {
+    set({ localModel: DEFAULT_LOCAL_MODEL_SETTINGS });
+    settingsStorage.setLocalModel(DEFAULT_LOCAL_MODEL_SETTINGS);
   },
 }));

@@ -1,7 +1,7 @@
 // LocalStorage service for persistence
 
-import type { Message, Settings, TotalMetrics } from '@/types';
-import { DEFAULT_SETTINGS } from '@/types';
+import type { Message, Settings, TotalMetrics, LocalModelSettings } from '@/types';
+import { DEFAULT_SETTINGS, DEFAULT_LOCAL_MODEL_SETTINGS } from '@/types';
 
 const KEYS = {
   CONVERSATION: 'chatConversationV1',
@@ -15,6 +15,7 @@ const KEYS = {
   WORKSPACE_ROOT: 'workspaceRoot',
   ASSISTANT_MODE: 'assistantMode',
   TOTAL_METRICS: 'totalMetrics',
+  LOCAL_MODEL: 'localModel',
 } as const;
 
 // Helper functions
@@ -82,6 +83,7 @@ export const settingsStorage = {
       mcpConfigPath: safeGet<string>(KEYS.MCP_CONFIG_PATH, DEFAULT_SETTINGS.mcpConfigPath),
       workspaceRoot: safeGet<string>(KEYS.WORKSPACE_ROOT, DEFAULT_SETTINGS.workspaceRoot),
       assistantMode: safeGet<boolean>(KEYS.ASSISTANT_MODE, DEFAULT_SETTINGS.assistantMode),
+      localModel: safeGet<LocalModelSettings>(KEYS.LOCAL_MODEL, DEFAULT_LOCAL_MODEL_SETTINGS),
     };
   },
 
@@ -94,6 +96,7 @@ export const settingsStorage = {
     safeSet(KEYS.MCP_CONFIG_PATH, settings.mcpConfigPath);
     safeSet(KEYS.WORKSPACE_ROOT, settings.workspaceRoot);
     safeSet(KEYS.ASSISTANT_MODE, settings.assistantMode);
+    safeSet(KEYS.LOCAL_MODEL, settings.localModel);
   },
 
   setSystemPrompt(prompt: string): void {
@@ -126,6 +129,10 @@ export const settingsStorage = {
 
   setAssistantMode(enabled: boolean): void {
     safeSet(KEYS.ASSISTANT_MODE, enabled);
+  },
+
+  setLocalModel(localModel: LocalModelSettings): void {
+    safeSet(KEYS.LOCAL_MODEL, localModel);
   },
 };
 
