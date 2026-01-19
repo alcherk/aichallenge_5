@@ -270,7 +270,7 @@ export const ChatContainer: React.FC = () => {
       <div className="relative">
         <ChatInput
           onSend={handleSendMessage}
-          disabled={isStreaming || showOfflineBanner}
+          disabled={isStreaming || !!showOfflineBanner}
           placeholder={
             showOfflineBanner
               ? 'Ollama unavailable. Click retry or switch to cloud.'

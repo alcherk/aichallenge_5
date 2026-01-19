@@ -35,3 +35,6 @@ Thumbs.db
 
 # RAG index state
 .rag_index_state.json
+
+# Cache
+cache/

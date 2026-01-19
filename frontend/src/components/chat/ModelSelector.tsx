@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '@/store/settingsStore';
+import { chatAPI } from '@/services/api';
 
 type ModelStatus = 'loaded' | 'available' | 'unavailable';
 
@@ -12,22 +13,21 @@ interface ModelOption {
 }
 
 interface ModelSelectorProps {
-  models?: ModelOption[];
   className?: string;
 }
 
-// Placeholder models - actual API integration comes in D.5
-const DEFAULT_LOCAL_MODELS: ModelOption[] = [
-  { name: 'qwen2.5:14b', provider: 'local', available: true, status: 'available', description: 'Qwen 2.5 14B - Balanced performance' },
-  { name: 'llama3.2:3b', provider: 'local', available: true, status: 'available', description: 'Llama 3.2 3B - Fast and lightweight' },
-  { name: 'mistral:7b', provider: 'local', available: false, status: 'unavailable', description: 'Mistral 7B - Not installed' },
-];
-
-const DEFAULT_CLOUD_MODELS: ModelOption[] = [
+// Cloud models are always available
+const CLOUD_MODELS: ModelOption[] = [
   { name: 'gpt-4o-mini', provider: 'cloud', available: true, status: 'available', description: 'Recommended - Fast and affordable' },
   { name: 'gpt-4o', provider: 'cloud', available: true, status: 'available', description: 'Most powerful, multimodal' },
   { name: 'gpt-4-turbo', provider: 'cloud', available: true, status: 'available', description: 'Fast and capable' },
 ];
+
+// Format model size for display
+const formatSize = (bytes: number): string => {
+  const gb = bytes / (1024 * 1024 * 1024);
+  return `${gb.toFixed(1)}GB`;
+};
 
 const getStatusIndicator = (status: ModelStatus | undefined): { color: string; label: string } => {
   switch (status) {
@@ -47,19 +47,45 @@ const getProviderIcon = (provider: 'local' | 'cloud'): string => {
 };
 
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
-  models,
   className = ''
 }) => {
   const { localModel, setLocalModelSetting } = useSettingsStore();
   const [isOpen, setIsOpen] = useState(false);
+  const [localModels, setLocalModels] = useState<ModelOption[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Merge provided models with defaults
-  const allModels = models || [...DEFAULT_LOCAL_MODELS, ...DEFAULT_CLOUD_MODELS];
+  // Fetch models from Ollama
+  const fetchLocalModels = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const models = await chatAPI.getOllamaModels();
+      const modelOptions: ModelOption[] = models.map((m) => ({
+        name: m.name,
+        provider: 'local' as const,
+        available: true,
+        status: 'available' as ModelStatus,
+        description: `${formatSize(m.size)} - Installed`,
+      }));
+      setLocalModels(modelOptions);
+    } catch (error) {
+      console.error('Failed to fetch Ollama models:', error);
+      setLocalModels([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-  // Group models by provider
-  const localModels = allModels.filter(m => m.provider === 'local');
-  const cloudModels = allModels.filter(m => m.provider === 'cloud');
+  // Fetch models on mount
+  useEffect(() => {
+    fetchLocalModels();
+  }, [fetchLocalModels]);
+
+  // Cloud models are always available
+  const cloudModels = CLOUD_MODELS;
+
+  // All models combined
+  const allModels = [...localModels, ...cloudModels];
 
   // Find currently selected model
   const currentModel = allModels.find(m => m.name === localModel.model) || {
@@ -193,17 +219,34 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           aria-label="Select a model"
         >
           {/* Local Models Section */}
-          {localModels.length > 0 && (
-            <div>
-              <div className="px-3 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wide bg-slate-900/50 flex items-center gap-2">
+          <div>
+            <div className="px-3 py-2 text-xs font-semibold text-slate-400 uppercase tracking-wide bg-slate-900/50 flex items-center justify-between">
+              <div className="flex items-center gap-2">
                 <span>{getProviderIcon('local')}</span>
-                <span>Local Models</span>
+                <span>Local Models (Ollama)</span>
               </div>
-              <div role="group" aria-label="Local models">
-                {localModels.map(model => renderModelOption(model, model.name === currentModel.name))}
-              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fetchLocalModels();
+                }}
+                disabled={isLoading}
+                className="text-xs px-2 py-0.5 bg-slate-700 hover:bg-slate-600 rounded disabled:opacity-50"
+                title="Refresh models from Ollama"
+              >
+                {isLoading ? '...' : '↻'}
+              </button>
             </div>
-          )}
+            <div role="group" aria-label="Local models">
+              {localModels.length > 0 ? (
+                localModels.map(model => renderModelOption(model, model.name === currentModel.name))
+              ) : (
+                <div className="px-3 py-2 text-sm text-slate-500 italic">
+                  {isLoading ? 'Loading...' : 'No models installed. Run: ollama pull llama3.2'}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Cloud Models Section */}
           {cloudModels.length > 0 && (
@@ -218,12 +261,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             </div>
           )}
 
-          {/* Empty state */}
-          {localModels.length === 0 && cloudModels.length === 0 && (
-            <div className="px-3 py-4 text-center text-slate-400 text-sm">
-              No models available
-            </div>
-          )}
         </div>
       )}
     </div>

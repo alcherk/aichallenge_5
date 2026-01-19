@@ -1,13 +1,18 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '@/store/settingsStore';
+import { chatAPI } from '@/services/api';
 
-// Placeholder models list - will be replaced with API data in later tasks
-const PLACEHOLDER_MODELS = [
-  { id: 'qwen2.5:14b', name: 'Qwen 2.5 14B', size: '14B' },
-  { id: 'qwen2.5:7b', name: 'Qwen 2.5 7B', size: '7B' },
-  { id: 'llama3.2:latest', name: 'Llama 3.2', size: '8B' },
-  { id: 'mistral:latest', name: 'Mistral', size: '7B' },
-];
+interface OllamaModelOption {
+  id: string;
+  name: string;
+  size: string;
+}
+
+// Format bytes to human readable
+const formatSize = (bytes: number): string => {
+  const gb = bytes / (1024 * 1024 * 1024);
+  return `${gb.toFixed(1)}GB`;
+};
 
 interface SliderProps {
   label: string;
@@ -116,22 +121,43 @@ function Collapsible({ title, children, defaultOpen = false }: CollapsibleProps)
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
-  models: Array<{ id: string; name: string; size: string }>;
+  models: OllamaModelOption[];
+  isLoading?: boolean;
+  onRefresh?: () => void;
 }
 
-function ModelSelector({ value, onChange, models }: ModelSelectorProps) {
+function ModelSelector({ value, onChange, models, isLoading, onRefresh }: ModelSelectorProps) {
   return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-    >
-      {models.map((model) => (
-        <option key={model.id} value={model.id}>
-          {model.name} ({model.size})
-        </option>
-      ))}
-    </select>
+    <div className="flex gap-2">
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={isLoading || models.length === 0}
+        className="flex-1 px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer disabled:opacity-50"
+      >
+        {models.length === 0 ? (
+          <option value="">
+            {isLoading ? 'Loading...' : 'No models found'}
+          </option>
+        ) : (
+          models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.name} ({model.size})
+            </option>
+          ))
+        )}
+      </select>
+      {onRefresh && (
+        <button
+          onClick={onRefresh}
+          disabled={isLoading}
+          title="Refresh models from Ollama"
+          className="px-3 py-2 rounded-lg border border-slate-600 bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 transition-colors"
+        >
+          {isLoading ? '...' : '↻'}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -171,6 +197,39 @@ function ProviderToggle({ provider, onChange }: ProviderToggleProps) {
 
 export function LocalModelSettings() {
   const { localModel, setLocalModelSetting, resetLocalModelSettings } = useSettingsStore();
+  const [ollamaModels, setOllamaModels] = useState<OllamaModelOption[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+  // Fetch models from Ollama
+  const fetchModels = useCallback(async () => {
+    setIsLoadingModels(true);
+    try {
+      const models = await chatAPI.getOllamaModels();
+      const modelOptions: OllamaModelOption[] = models.map((m) => ({
+        id: m.name,
+        name: m.name.split(':')[0], // Remove tag for display
+        size: formatSize(m.size),
+      }));
+      setOllamaModels(modelOptions);
+
+      // If current model is not in the list, select the first available
+      if (modelOptions.length > 0 && !modelOptions.find(m => m.id === localModel.model)) {
+        setLocalModelSetting('model', modelOptions[0].id);
+      }
+    } catch (error) {
+      console.error('Failed to fetch Ollama models:', error);
+      setOllamaModels([]);
+    } finally {
+      setIsLoadingModels(false);
+    }
+  }, [localModel.model, setLocalModelSetting]);
+
+  // Fetch models on mount and when provider changes to local
+  useEffect(() => {
+    if (localModel.provider === 'local') {
+      fetchModels();
+    }
+  }, [localModel.provider, fetchModels]);
 
   const handleProviderChange = (provider: 'cloud' | 'local') => {
     setLocalModelSetting('provider', provider);
@@ -219,10 +278,14 @@ export function LocalModelSettings() {
           <ModelSelector
             value={localModel.model}
             onChange={(model) => setLocalModelSetting('model', model)}
-            models={PLACEHOLDER_MODELS}
+            models={ollamaModels}
+            isLoading={isLoadingModels}
+            onRefresh={fetchModels}
           />
           <p className="text-xs text-slate-500">
-            Select from available Ollama models
+            {ollamaModels.length > 0
+              ? `${ollamaModels.length} model(s) installed`
+              : 'Run: ollama pull llama3.2'}
           </p>
         </div>
       )}

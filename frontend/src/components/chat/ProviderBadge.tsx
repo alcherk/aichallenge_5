@@ -1,17 +1,18 @@
 import React from 'react';
 import type { ModelProvider } from '@/types';
 
-interface ProviderBadgeProps {
+export interface ProviderBadgeProps {
   provider: ModelProvider;
+  model?: string;
 }
 
 /**
- * Badge component that displays the current LLM provider (local or cloud).
+ * Badge component that displays the current LLM provider and model.
  *
  * - Local: teal/green accent indicating local Ollama model
  * - Cloud: blue accent indicating OpenAI cloud model
  */
-export const ProviderBadge: React.FC<ProviderBadgeProps> = ({ provider }) => {
+export const ProviderBadge: React.FC<ProviderBadgeProps> = ({ provider, model }) => {
   const isLocal = provider === 'local';
 
   return (
@@ -25,23 +26,26 @@ export const ProviderBadge: React.FC<ProviderBadgeProps> = ({ provider }) => {
         transition-all duration-300 ease-in-out
         ${
           isLocal
-            ? 'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-900/30 dark:text-teal-300 dark:border-teal-700'
-            : 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700'
+            ? 'bg-teal-900/30 text-teal-300 border-teal-700'
+            : 'bg-blue-900/30 text-blue-300 border-blue-700'
         }
       `}
       role="status"
-      aria-label={`Using ${isLocal ? 'local' : 'cloud'} model`}
+      aria-label={`Using ${isLocal ? 'local' : 'cloud'} model${model ? `: ${model}` : ''}`}
     >
       {isLocal ? (
         <>
-          <span aria-hidden="true">&#128421;</span>
+          <span aria-hidden="true">🖥️</span>
           <span>Local</span>
         </>
       ) : (
         <>
-          <span aria-hidden="true">&#9729;</span>
+          <span aria-hidden="true">☁️</span>
           <span>Cloud</span>
         </>
+      )}
+      {model && (
+        <span className="text-slate-400 ml-1">• {model}</span>
       )}
     </div>
   );

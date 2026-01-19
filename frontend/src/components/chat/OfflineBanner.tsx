@@ -1,36 +1,42 @@
 import React from 'react';
-import { useOnlineStatus } from '@/hooks/useOnlineStatus';
+
+interface OfflineBannerProps {
+  onRetry?: () => void;
+  isRetrying?: boolean;
+}
 
 /**
- * Banner component that displays when the browser is offline.
+ * Banner component that displays when Ollama is unavailable.
  *
  * Shows a prominent amber/yellow warning banner at the top of the chat area
- * to inform users they are in offline mode and will use the local model only.
- *
- * The banner automatically hides when the connection is restored.
+ * to inform users the local model is unavailable.
  */
-export const OfflineBanner: React.FC = () => {
-  const isOnline = useOnlineStatus();
-
-  if (isOnline) return null;
-
+export const OfflineBanner: React.FC<OfflineBannerProps> = ({ onRetry, isRetrying }) => {
   return (
     <div
       className="
         sticky top-0 z-50
         flex items-center justify-center gap-2
         px-4 py-2
-        bg-amber-100 text-amber-800
-        border-b border-amber-300
-        dark:bg-amber-900/40 dark:text-amber-200 dark:border-amber-700
+        bg-amber-900/60 text-amber-200
+        border-b border-amber-700
         text-sm font-medium
         shadow-sm
       "
       role="alert"
       aria-live="polite"
     >
-      <span aria-hidden="true">&#9889;</span>
-      <span>Offline Mode — Using local model only</span>
+      <span aria-hidden="true">⚠️</span>
+      <span>Ollama Unavailable — Local model cannot be used</span>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          disabled={isRetrying}
+          className="ml-2 px-2 py-1 bg-amber-700 hover:bg-amber-600 rounded text-xs disabled:opacity-50"
+        >
+          {isRetrying ? 'Checking...' : 'Retry'}
+        </button>
+      )}
     </div>
   );
 };
