@@ -13,8 +13,9 @@ from starlette.requests import Request
 import json
 
 from .config import get_settings
-from .schemas import ChatRequest, ChatResponse, StructuredResponse
+from .schemas import ChatRequest, ChatResponse, ChatChoice, ChatMessage, ChatUsage, StructuredResponse
 from .services.chatgpt_client import call_chatgpt, stream_chatgpt
+from .services.provider_router import get_provider_router, ProviderResponse, StreamChunk
 from .mcp.manager import init_mcp_manager
 from .mcp.manager import ensure_mcp_manager, get_mcp_manager
 
@@ -202,7 +203,112 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
         upstream_finish_reason: Optional[str] = None
         token_usage: Optional[dict] = None
         chunk_count = 0
+        provider_used: str = request.provider or "cloud"
 
+        # === LOCAL PROVIDER PATH ===
+        if request.provider == "local":
+            try:
+                router = get_provider_router()
+                # Convert ChatRequest messages to dict format for router
+                messages_dict = [
+                    {"role": m.role, "content": m.content}
+                    for m in request.messages
+                ]
+
+                logger.debug(
+                    "stream local begin request_id=%s model=%s messages=%d",
+                    request_id,
+                    request.model,
+                    len(messages_dict),
+                )
+
+                async for stream_chunk in router.stream_chat(
+                    messages=messages_dict,
+                    provider="local",
+                    model=request.model,
+                    temperature=request.temperature or 0.7,
+                    max_tokens=request.max_tokens,
+                    top_p=request.top_p,
+                ):
+                    chunk_count += 1
+                    upstream_model = stream_chunk.model or upstream_model
+
+                    if stream_chunk.done:
+                        upstream_finish_reason = "stop"
+                        continue
+
+                    if stream_chunk.delta:
+                        assistant_text_parts.append(stream_chunk.delta)
+                        yield sse("chunk", {"delta": stream_chunk.delta})
+                        if chunk_count == 1 or chunk_count % 25 == 0:
+                            logger.debug(
+                                "stream local chunk request_id=%s chunk_count=%d delta_len=%d",
+                                request_id,
+                                chunk_count,
+                                len(stream_chunk.delta),
+                            )
+
+                full_text = "".join(assistant_text_parts)
+                chat_response = {
+                    "id": f"local-{request_id or 'stream'}",
+                    "model": upstream_model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": full_text},
+                            "finish_reason": upstream_finish_reason,
+                        }
+                    ],
+                    "usage": None,  # Local provider doesn't track token usage in streaming
+                    "provider": "local",
+                }
+
+                structured = {
+                    "success": True,
+                    "status_code": 200,
+                    "message": "Chat completion successful",
+                    "data": chat_response,
+                    "error": None,
+                    "metadata": {
+                        "timestamp": time.time(),
+                        "request_id": request_id,
+                        "model": upstream_model,
+                        "provider": "local",
+                        "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                        "token_usage": None,
+                    },
+                }
+                yield sse("done", structured)
+                logger.info(
+                    "stream local done request_id=%s model=%s chunks=%d time_ms=%.2f",
+                    request_id,
+                    upstream_model,
+                    chunk_count,
+                    (time.time() - start_time) * 1000.0,
+                )
+                return  # Exit generator after local path completes
+
+            except Exception as e:
+                logger.exception("stream local error request_id=%s", request_id)
+                yield sse(
+                    "error",
+                    {
+                        "success": False,
+                        "status_code": 500,
+                        "message": "Local provider error",
+                        "data": None,
+                        "error": {"type": type(e).__name__, "detail": str(e)},
+                        "metadata": {
+                            "timestamp": time.time(),
+                            "request_id": request_id,
+                            "provider": "local",
+                            "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                        },
+                    },
+                )
+                return  # Exit generator after error
+
+        # === CLOUD PROVIDER PATH (existing code, unchanged) ===
         try:
             logger.debug(
                 "stream upstream begin request_id=%s api_base=%s model=%s",
@@ -247,6 +353,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                     }
                 ],
                 "usage": token_usage,
+                "provider": "cloud",
             }
 
             structured = {
@@ -259,6 +366,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                     "timestamp": time.time(),
                     "request_id": request_id,
                     "model": chat_response["model"],
+                    "provider": "cloud",
                     "processing_time_ms": round((time.time() - start_time) * 1000, 2),
                     "token_usage": token_usage,
                 },
@@ -379,17 +487,118 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
     start_time = time.time()
     request_id = getattr(http_request.state, "request_id", None)
     logger.debug(
-        "chat request received request_id=%s model=%s messages=%d",
+        "chat request received request_id=%s model=%s messages=%d provider=%s",
         request_id,
         request.model or settings.openai_model,
         len(request.messages or []),
+        request.provider,
     )
-    
+
+    # === LOCAL PROVIDER PATH ===
+    if request.provider == "local":
+        try:
+            router = get_provider_router()
+            # Convert ChatRequest messages to dict format for router
+            messages_dict = [
+                {"role": m.role, "content": m.content}
+                for m in request.messages
+            ]
+
+            logger.debug(
+                "chat local begin request_id=%s model=%s messages=%d",
+                request_id,
+                request.model,
+                len(messages_dict),
+            )
+
+            provider_response: ProviderResponse = await router.chat(
+                messages=messages_dict,
+                provider="local",
+                model=request.model,
+                temperature=request.temperature or 0.7,
+                max_tokens=request.max_tokens,
+                top_p=request.top_p,
+            )
+
+            # Convert ProviderResponse to ChatResponse format
+            chat_response = ChatResponse(
+                id=f"local-{request_id or 'chat'}",
+                model=provider_response.model,
+                choices=[
+                    ChatChoice(
+                        index=0,
+                        message=ChatMessage(role="assistant", content=provider_response.content),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=ChatUsage(
+                    prompt_tokens=0,  # Not tracked by Ollama in non-streaming
+                    completion_tokens=provider_response.tokens_used or 0,
+                    total_tokens=provider_response.tokens_used or 0,
+                ) if provider_response.tokens_used else None,
+                provider="local",
+            )
+
+            # Build metadata dict
+            metadata_dict = {
+                "timestamp": time.time(),
+                "request_id": request_id,
+                "model": provider_response.model,
+                "provider": "local",
+                "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                "inference_time_ms": provider_response.inference_time_ms,
+                "token_usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": provider_response.tokens_used or 0,
+                    "total_tokens": provider_response.tokens_used or 0,
+                } if provider_response.tokens_used else None,
+            }
+
+            logger.info(
+                "chat local done request_id=%s model=%s tokens=%s time_ms=%.2f",
+                request_id,
+                provider_response.model,
+                provider_response.tokens_used,
+                (time.time() - start_time) * 1000.0,
+            )
+
+            return StructuredResponse(
+                success=True,
+                status_code=200,
+                message="Chat completion successful",
+                data=chat_response,
+                error=None,
+                metadata=metadata_dict,
+            )
+
+        except Exception as e:
+            logger.exception("chat local error request_id=%s", request_id)
+            return StructuredResponse(
+                success=False,
+                status_code=500,
+                message="Local provider error",
+                data=None,
+                error={
+                    "type": type(e).__name__,
+                    "detail": str(e),
+                },
+                metadata={
+                    "timestamp": time.time(),
+                    "request_id": request_id,
+                    "provider": "local",
+                    "processing_time_ms": round((time.time() - start_time) * 1000, 2),
+                },
+            )
+
+    # === CLOUD PROVIDER PATH (existing code, unchanged) ===
     try:
         chat_response, rag_metadata = await call_chatgpt(request)
-        
+
+        # Set provider on response
+        chat_response.provider = "cloud"
+
         # Assistant response is now plain text/markdown - no JSON formatting needed
-        
+
         # Extract token usage information
         token_usage = None
         if chat_response.usage:
@@ -398,20 +607,21 @@ async def chat(request: ChatRequest, http_request: Request) -> StructuredRespons
                 "completion_tokens": chat_response.usage.completion_tokens,
                 "total_tokens": chat_response.usage.total_tokens,
             }
-        
+
         # Build metadata dict
         metadata_dict = {
             "timestamp": time.time(),
             "request_id": request_id,
             "model": chat_response.model,
+            "provider": "cloud",
             "processing_time_ms": round((time.time() - start_time) * 1000, 2),
             "token_usage": token_usage,
         }
-        
+
         # Add RAG metadata if available
         if rag_metadata:
             metadata_dict["rag"] = rag_metadata
-        
+
         return StructuredResponse(
             success=True,
             status_code=200,
