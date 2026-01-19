@@ -83,6 +83,50 @@ async def health_check() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/api/ollama/health")
+async def ollama_health():
+    """Check Ollama availability and list models."""
+    from .services.ollama_client import get_ollama_client
+
+    client = get_ollama_client()
+    status = await client.health_check()
+
+    return {
+        "available": status.available,
+        "models": status.models,
+        "default_model": settings.ollama_default_model,
+        "default_loaded": settings.ollama_default_model in status.models,
+        "error": status.error
+    }
+
+
+@app.get("/api/ollama/models")
+async def ollama_models():
+    """List available Ollama models with details."""
+    from .services.ollama_client import get_ollama_client
+
+    client = get_ollama_client()
+
+    try:
+        models = await client.list_models()
+        return {
+            "models": [
+                {
+                    "name": m.name,
+                    "size": m.size,
+                    "modified_at": m.modified_at,
+                }
+                for m in models
+            ]
+        }
+    except Exception as e:
+        logger.warning("Failed to list Ollama models: %s", e)
+        return {
+            "models": [],
+            "error": str(e)
+        }
+
+
 @app.get("/api/mcp/status")
 async def mcp_status(
     enabled: Optional[bool] = None,
@@ -203,7 +247,6 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
         upstream_finish_reason: Optional[str] = None
         token_usage: Optional[dict] = None
         chunk_count = 0
-        provider_used: str = request.provider or "cloud"
 
         # === LOCAL PROVIDER PATH ===
         if request.provider == "local":
