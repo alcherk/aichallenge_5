@@ -14,7 +14,10 @@ class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     model: Optional[str] = None
     temperature: Optional[float] = 0.7
+    top_p: Optional[float] = None  # Nucleus sampling parameter
     max_tokens: Optional[int] = None
+    # Provider selection: "cloud" (OpenAI) or "local" (Ollama)
+    provider: Literal["cloud", "local"] = "cloud"
     # Optional per-request MCP overrides (backward-compatible).
     mcp_enabled: Optional[bool] = None
     mcp_config_path: Optional[str] = None
@@ -40,6 +43,16 @@ class ChatResponse(BaseModel):
     model: str
     choices: List[ChatChoice]
     usage: Optional[ChatUsage] = None
+    provider: Optional[str] = None  # "cloud" or "local"
+
+
+class MessageMetadata(BaseModel):
+    """Detailed metadata for message tracking and analytics."""
+    model: str
+    provider: Literal["cloud", "local"]
+    timestamp: float
+    tokens_used: Optional[int] = None
+    inference_time_ms: Optional[int] = None
 
 
 class ErrorResponse(BaseModel):
