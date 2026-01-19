@@ -1,7 +1,7 @@
 // Metrics state management with Zustand
 
 import { create } from 'zustand';
-import type { MetricData, StructuredResponse } from '@/types';
+import type { MetricData, StructuredResponse, InferenceMetrics } from '@/types';
 import { MODEL_PRICING, CONTEXT_WINDOWS } from '@/types';
 import { metricsStorage } from '@/services/storage';
 
@@ -10,11 +10,23 @@ interface MetricsState {
   totalRequests: number;
   totalCost: number;
 
+  // Inference metrics for local LLM streaming
+  currentInferenceMetrics: InferenceMetrics | null;
+
   // Actions
   updateMetrics: (response: StructuredResponse) => void;
   resetMetrics: () => void;
   resetCurrentMetrics: () => void;
   loadFromStorage: () => void;
+
+  // Inference metrics actions
+  setInferenceMetrics: (metrics: InferenceMetrics) => void;
+  clearInferenceMetrics: () => void;
+  updateTokensPerSecond: (tps: number) => void;
+  updateFirstTokenLatency: (latencyMs: number) => void;
+  updateTokensGenerated: (tokens: number) => void;
+  updateTotalLatency: (latencyMs: number) => void;
+  updateContextUtilization: (utilization: number) => void;
 }
 
 function calculateCost(model: string, inputTokens: number, outputTokens: number): number {
@@ -24,10 +36,20 @@ function calculateCost(model: string, inputTokens: number, outputTokens: number)
   return inputCost + outputCost;
 }
 
+// Default inference metrics (all zeros)
+const defaultInferenceMetrics: InferenceMetrics = {
+  tokensPerSecond: 0,
+  firstTokenLatencyMs: 0,
+  totalLatencyMs: 0,
+  tokensGenerated: 0,
+  contextUtilization: 0,
+};
+
 export const useMetricsStore = create<MetricsState>((set, get) => ({
   currentMetrics: null,
   totalRequests: 0,
   totalCost: 0,
+  currentInferenceMetrics: null,
 
   updateMetrics: (response) => {
     if (!response.success || !response.metadata) return;
@@ -94,6 +116,66 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
     set({
       totalRequests: requests,
       totalCost,
+    });
+  },
+
+  // Inference metrics actions for local LLM streaming
+
+  setInferenceMetrics: (metrics) => {
+    set({ currentInferenceMetrics: metrics });
+  },
+
+  clearInferenceMetrics: () => {
+    set({ currentInferenceMetrics: null });
+  },
+
+  updateTokensPerSecond: (tps) => {
+    const current = get().currentInferenceMetrics || { ...defaultInferenceMetrics };
+    set({
+      currentInferenceMetrics: {
+        ...current,
+        tokensPerSecond: tps,
+      },
+    });
+  },
+
+  updateFirstTokenLatency: (latencyMs) => {
+    const current = get().currentInferenceMetrics || { ...defaultInferenceMetrics };
+    set({
+      currentInferenceMetrics: {
+        ...current,
+        firstTokenLatencyMs: latencyMs,
+      },
+    });
+  },
+
+  updateTokensGenerated: (tokens) => {
+    const current = get().currentInferenceMetrics || { ...defaultInferenceMetrics };
+    set({
+      currentInferenceMetrics: {
+        ...current,
+        tokensGenerated: tokens,
+      },
+    });
+  },
+
+  updateTotalLatency: (latencyMs) => {
+    const current = get().currentInferenceMetrics || { ...defaultInferenceMetrics };
+    set({
+      currentInferenceMetrics: {
+        ...current,
+        totalLatencyMs: latencyMs,
+      },
+    });
+  },
+
+  updateContextUtilization: (utilization) => {
+    const current = get().currentInferenceMetrics || { ...defaultInferenceMetrics };
+    set({
+      currentInferenceMetrics: {
+        ...current,
+        contextUtilization: Math.max(0, Math.min(1, utilization)), // Clamp to 0-1
+      },
     });
   },
 }));
