@@ -873,9 +873,16 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
                             # Append to existing system message for project questions
                             existing_system = system_messages[0].get("content", "")
                             messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
-    
-    # RAG retrieval (if enabled)
-    if settings.rag_enabled:
+
+    # RAG retrieval logic:
+    # - If request.rag_enabled is False: skip RAG entirely
+    # - If request.rag_enabled is True: always apply RAG
+    # - If request.rag_enabled is None: use default (settings.rag_enabled for cloud)
+    should_use_rag = (
+        payload.rag_enabled is True or
+        (payload.rag_enabled is None and settings.rag_enabled)
+    )
+    if should_use_rag:
         # Special handling for /review command
         if is_review_command and review_diff_data and review_diff_data.get("has_changes", False):
             # Build RAG queries from diff and changed files
@@ -1032,8 +1039,8 @@ async def call_chatgpt(payload: ChatRequest) -> Tuple[ChatResponse, Optional[Dic
             else:
                 logger.debug("RAG skipped: no user messages found")
     else:
-        logger.debug("RAG disabled")
-    
+        logger.debug("RAG disabled (rag_enabled=%s, settings.rag_enabled=%s)", payload.rag_enabled, settings.rag_enabled)
+
     mcp_enabled = bool(payload.mcp_enabled) if payload.mcp_enabled is not None else bool(
         payload.mcp_config_path or settings.mcp_config_path
     )
@@ -1355,9 +1362,16 @@ async def stream_chatgpt(payload: ChatRequest):
                             # Append to existing system message for project questions
                             existing_system = system_messages[0].get("content", "")
                             base_messages[0]["content"] = f"{existing_system}\n\n{dev_assistant_system_prompt}"
-    
-    # RAG retrieval (if enabled)
-    if settings.rag_enabled:
+
+    # RAG retrieval logic:
+    # - If request.rag_enabled is False: skip RAG entirely
+    # - If request.rag_enabled is True: always apply RAG
+    # - If request.rag_enabled is None: use default (settings.rag_enabled for cloud)
+    should_use_rag = (
+        payload.rag_enabled is True or
+        (payload.rag_enabled is None and settings.rag_enabled)
+    )
+    if should_use_rag:
         # Special handling for /review command
         if is_review_command and review_diff_data and review_diff_data.get("has_changes", False):
             # Build RAG queries from diff and changed files
@@ -1481,8 +1495,8 @@ async def stream_chatgpt(payload: ChatRequest):
             else:
                 logger.debug("RAG skipped: no user messages found (stream)")
     else:
-        logger.debug("RAG disabled (stream)")
-    
+        logger.debug("RAG disabled (stream, rag_enabled=%s, settings.rag_enabled=%s)", payload.rag_enabled, settings.rag_enabled)
+
     base_input = _messages_to_responses_input(base_messages)
     mcp_enabled = bool(payload.mcp_enabled) if payload.mcp_enabled is not None else bool(
         payload.mcp_config_path or settings.mcp_config_path

@@ -18,6 +18,12 @@ export interface ChatRequest {
   workspace_root?: string | null;
   // Assistant mode: strict RAG-only mode
   assistant_mode?: boolean | null;
+  // Provider selection for local/cloud routing
+  provider?: 'cloud' | 'local';
+  // RAG toggle for per-request control
+  rag_enabled?: boolean | null;
+  // Additional local model options
+  top_p?: number;
 }
 
 export interface TokenUsage {

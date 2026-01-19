@@ -4,6 +4,7 @@ import { useChatStore } from '@/store/chatStore';
 import { ModelSelector } from './ModelSelector';
 import { TemperatureSlider } from './TemperatureSlider';
 import { SystemPromptEditor } from './SystemPromptEditor';
+import { LocalModelSettings } from './LocalModelSettings';
 import { DEFAULT_SETTINGS } from '@/types';
 
 interface SettingsPanelProps {
@@ -197,6 +198,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ isOpen, onClose })
             <p className="text-xs text-slate-400 mb-3">
               When enabled, assistant only answers using RAG documents and FAQs. Responds "I don't have that information" if no relevant info found. Does not assume or fabricate information.
             </p>
+          </div>
+
+          {/* Local Model Settings */}
+          <div className="border-t border-slate-700 pt-6">
+            <LocalModelSettings />
           </div>
 
           {/* MCP Settings */}

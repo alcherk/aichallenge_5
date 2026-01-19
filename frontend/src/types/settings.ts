@@ -88,3 +88,23 @@ export const CONTEXT_WINDOWS: Record<ModelName, number> = {
   'gpt-4o-mini': 128000,
   'gpt-3.5-turbo': 16385,
 };
+
+// Ollama types for local LLM support
+export interface OllamaHealthResponse {
+  available: boolean;
+  version: string | null;
+  models_loaded: number;
+  error: string | null;
+}
+
+export interface OllamaModel {
+  name: string;
+  size: number;
+  modified_at: string;
+  digest: string;
+}
+
+export interface CancelResponse {
+  success: boolean;
+  message: string;
+}

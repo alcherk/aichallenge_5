@@ -3,6 +3,27 @@
 import type { ChatRequest, SSEEvent } from '@/types';
 
 import type { StructuredResponse } from '@/types';
+import { useMetricsStore } from '@/store/metricsStore';
+
+// Module-level AbortController for canceling ongoing requests
+let abortController: AbortController | null = null;
+
+/**
+ * Cancel the current generation/streaming request
+ */
+export function cancelGeneration(): void {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
+}
+
+/**
+ * Check if a generation is currently in progress
+ */
+export function isGenerating(): boolean {
+  return abortController !== null;
+}
 
 export interface StreamCallbacks {
   onChunk?: (delta: string) => void;
@@ -56,6 +77,13 @@ export async function streamChat(
   request: ChatRequest,
   callbacks: StreamCallbacks
 ): Promise<void> {
+  // Cancel any existing request before starting a new one
+  cancelGeneration();
+
+  // Create a new AbortController for this request
+  abortController = new AbortController();
+  const { signal } = abortController;
+
   // Defensive: strip MCP-related fields from the outbound payload.
   // (The backend supports MCP overrides, but the UI should not send them for chat requests.)
   const sanitizedRequest: Record<string, unknown> = { ...(request as unknown as Record<string, unknown>) };
@@ -70,6 +98,7 @@ export async function streamChat(
       Accept: 'text/event-stream',
     },
     body: JSON.stringify(sanitizedRequest),
+    signal,
   });
 
   if (!response.ok || !response.body) {
@@ -79,6 +108,14 @@ export async function streamChat(
   const reader = response.body.getReader();
   const decoder = new TextDecoder('utf-8');
   const sseState = { buffer: '' };
+
+  // Metrics tracking state
+  const startTime = Date.now();
+  let firstTokenTime: number | null = null;
+  let tokensGenerated = 0;
+
+  // Get metrics store methods (Zustand pattern for use outside React)
+  const metricsStore = useMetricsStore.getState();
 
   try {
     while (true) {
@@ -90,8 +127,30 @@ export async function streamChat(
 
       for (const evt of events) {
         if (evt.event === 'chunk' && evt.data && typeof evt.data.delta === 'string') {
+          // Track first token latency
+          if (firstTokenTime === null) {
+            firstTokenTime = Date.now();
+            const firstTokenLatency = firstTokenTime - startTime;
+            metricsStore.updateFirstTokenLatency(firstTokenLatency);
+          }
+
+          // Increment token count (approximate: 1 chunk = 1 token for simplicity)
+          tokensGenerated++;
+          metricsStore.updateTokensGenerated(tokensGenerated);
+
+          // Calculate and update tokens per second
+          const elapsedSeconds = (Date.now() - startTime) / 1000;
+          if (elapsedSeconds > 0) {
+            const tokensPerSecond = tokensGenerated / elapsedSeconds;
+            metricsStore.updateTokensPerSecond(tokensPerSecond);
+          }
+
           callbacks.onChunk?.(evt.data.delta);
         } else if (evt.event === 'done') {
+          // Update total latency when streaming completes
+          const totalLatency = Date.now() - startTime;
+          metricsStore.updateTotalLatency(totalLatency);
+
           callbacks.onDone?.(evt.data);
         } else if (evt.event === 'error') {
           callbacks.onError?.(evt.data);
@@ -103,14 +162,41 @@ export async function streamChat(
     const finalEvents = parseSSEEvents('\n\n', sseState);
     for (const evt of finalEvents) {
       if (evt.event === 'chunk' && evt.data && typeof evt.data.delta === 'string') {
+        // Track first token latency (in case first chunk is in final buffer)
+        if (firstTokenTime === null) {
+          firstTokenTime = Date.now();
+          const firstTokenLatency = firstTokenTime - startTime;
+          metricsStore.updateFirstTokenLatency(firstTokenLatency);
+        }
+
+        tokensGenerated++;
+        metricsStore.updateTokensGenerated(tokensGenerated);
+
+        const elapsedSeconds = (Date.now() - startTime) / 1000;
+        if (elapsedSeconds > 0) {
+          const tokensPerSecond = tokensGenerated / elapsedSeconds;
+          metricsStore.updateTokensPerSecond(tokensPerSecond);
+        }
+
         callbacks.onChunk?.(evt.data.delta);
       } else if (evt.event === 'done') {
+        const totalLatency = Date.now() - startTime;
+        metricsStore.updateTotalLatency(totalLatency);
+
         callbacks.onDone?.(evt.data);
       } else if (evt.event === 'error') {
         callbacks.onError?.(evt.data);
       }
     }
   } catch (error) {
+    // Don't re-throw if the request was intentionally aborted
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      // Request was cancelled - this is expected behavior
+      return;
+    }
     throw error;
+  } finally {
+    // Clean up the abort controller when streaming completes or fails
+    abortController = null;
   }
 }

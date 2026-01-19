@@ -1,6 +1,13 @@
 // API service for backend communication
 
-import type { ChatRequest, McpStatusResponse, StructuredResponse } from '@/types';
+import type {
+  ChatRequest,
+  McpStatusResponse,
+  StructuredResponse,
+  OllamaHealthResponse,
+  OllamaModel,
+  CancelResponse,
+} from '@/types';
 
 type McpStatusQuery = {
   enabled?: boolean;
@@ -54,5 +61,80 @@ export const chatAPI = {
       throw new Error(`MCP status request failed with status ${response.status}`);
     }
     return response.json();
+  },
+
+  /**
+   * Check Ollama health status
+   *
+   * Backend endpoint: GET /api/ollama/health
+   */
+  async checkOllamaHealth(): Promise<OllamaHealthResponse> {
+    try {
+      const response = await fetch('/api/ollama/health');
+      if (!response.ok) {
+        return {
+          available: false,
+          version: null,
+          models_loaded: 0,
+          error: `HTTP ${response.status}`,
+        };
+      }
+      return response.json();
+    } catch (error) {
+      return {
+        available: false,
+        version: null,
+        models_loaded: 0,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  },
+
+  /**
+   * Get available Ollama models
+   *
+   * Backend endpoint: GET /api/ollama/models
+   */
+  async getOllamaModels(): Promise<OllamaModel[]> {
+    try {
+      const response = await fetch('/api/ollama/models');
+      if (!response.ok) {
+        return [];
+      }
+      const data = await response.json();
+      return data.models || [];
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Cancel an in-progress generation
+   *
+   * Backend endpoint: POST /api/chat/cancel
+   */
+  async cancelGeneration(requestId: string): Promise<CancelResponse> {
+    try {
+      const response = await fetch('/api/chat/cancel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ request_id: requestId }),
+      });
+
+      if (!response.ok) {
+        return {
+          success: false,
+          message: `Cancel request failed with status ${response.status}`,
+        };
+      }
+      return response.json();
+    } catch (error) {
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
   },
 };

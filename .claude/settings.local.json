@@ -12,7 +12,18 @@
       "Bash(git push:*)",
       "Bash(ssh root@69.62.64.218 'cd /root/aichallenge_5 && git pull origin main')",
       "Bash(ssh root@69.62.64.218 'cd /root/aichallenge_5 && docker compose build --no-cache 2>&1')",
-      "Bash(ssh root@69.62.64.218:*)"
+      "Bash(ssh root@69.62.64.218:*)",
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(python3:*)",
+      "Bash(OLLAMA_ENABLED=false OLLAMA_BASE_URL=\"http://my-ollama:11434\" OLLAMA_DEFAULT_MODEL=\"llama3:8b\" OLLAMA_TIMEOUT=\"60\" python:*)",
+      "mcp__ide__getDiagnostics",
+      "Bash(pip install:*)",
+      "Bash(npm run lint)",
+      "Bash(npx tsc:*)",
+      "Bash(uvicorn app.app.main:app:*)",
+      "Bash(npm run dev:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)"
     ]
   }
 }

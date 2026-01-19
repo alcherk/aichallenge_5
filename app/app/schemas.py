@@ -24,6 +24,8 @@ class ChatRequest(BaseModel):
     workspace_root: Optional[str] = None
     # Assistant mode: strict RAG-only mode
     assistant_mode: Optional[bool] = None
+    # RAG toggle: None = use default for provider (cloud=enabled, local=disabled by default)
+    rag_enabled: Optional[bool] = None
 
 
 class ChatChoice(BaseModel):
@@ -43,7 +45,7 @@ class ChatResponse(BaseModel):
     model: str
     choices: List[ChatChoice]
     usage: Optional[ChatUsage] = None
-    provider: Optional[str] = None  # "cloud" or "local"
+    provider: Optional[Literal["cloud", "local"]] = None
 
 
 class MessageMetadata(BaseModel):
@@ -70,3 +72,14 @@ class StructuredResponse(BaseModel):
     data: Optional[ChatResponse] = None
     error: Optional[dict] = None
     metadata: Optional[dict] = None
+
+
+class CancelRequest(BaseModel):
+    """Request body for cancelling an in-progress generation."""
+    request_id: str
+
+
+class CancelResponse(BaseModel):
+    """Response for cancel operation."""
+    success: bool
+    message: str

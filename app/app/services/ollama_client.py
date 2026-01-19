@@ -6,6 +6,7 @@ Provides an OpenAI-compatible interface for Ollama, supporting:
 - Streaming chat completions
 - Health checks
 - Model listing
+- Tool calling (MCP integration)
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import AsyncGenerator, Any
+from typing import Any, AsyncGenerator
 
 import httpx
 
@@ -40,12 +41,22 @@ class OllamaStatus:
 
 
 @dataclass
+class ToolCall:
+    """Represents a tool call request from the model."""
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
 class OllamaResponse:
     """Response from Ollama chat completion."""
     content: str
     model: str
     tokens_used: int | None = None
     inference_time_ms: int | None = None
+    tool_calls: list[ToolCall] | None = None
+    finish_reason: str = "stop"
 
 
 class OllamaClient:
@@ -86,6 +97,7 @@ class OllamaClient:
         temperature: float = 0.7,
         top_p: float = 0.9,
         max_tokens: int = 2048,
+        tools: list[dict] | None = None,
     ) -> OllamaResponse:
         """
         Non-streaming chat completion.
@@ -96,9 +108,10 @@ class OllamaClient:
             temperature: Sampling temperature (0.0 to 1.0)
             top_p: Top-p sampling parameter
             max_tokens: Maximum tokens to generate
+            tools: Optional list of tool definitions in OpenAI format
 
         Returns:
-            OllamaResponse with content and metadata
+            OllamaResponse with content, metadata, and optional tool_calls
 
         Raises:
             httpx.TimeoutException: On request timeout
@@ -108,7 +121,7 @@ class OllamaClient:
         model = model or self.default_model
         url = f"{self.base_url}/api/chat"
 
-        body = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": False,
@@ -119,11 +132,17 @@ class OllamaClient:
             },
         }
 
+        # Add tools if provided (Ollama uses OpenAI-compatible format)
+        if tools:
+            body["tools"] = tools
+            logger.debug("Ollama chat with %d tools", len(tools))
+
         logger.debug(
-            "Ollama chat request: model=%s messages=%d temperature=%.2f",
+            "Ollama chat request: model=%s messages=%d temperature=%.2f tools=%d",
             model,
             len(messages),
             temperature,
+            len(tools) if tools else 0,
         )
 
         start_time = time.monotonic()
@@ -159,6 +178,10 @@ class OllamaClient:
         message = data.get("message", {})
         content = message.get("content", "")
 
+        # Parse tool calls from response
+        tool_calls = self._parse_tool_calls(message)
+        finish_reason = "tool_calls" if tool_calls else "stop"
+
         # Extract token counts (Ollama provides eval_count for output tokens)
         eval_count = data.get("eval_count")
         prompt_eval_count = data.get("prompt_eval_count")
@@ -173,10 +196,11 @@ class OllamaClient:
             inference_time_ms = int(total_duration_ns / 1_000_000)
 
         logger.info(
-            "Ollama chat completed: model=%s tokens=%s time=%dms",
+            "Ollama chat completed: model=%s tokens=%s time=%dms tool_calls=%d",
             data.get("model", model),
             tokens_used,
             inference_time_ms or elapsed_ms,
+            len(tool_calls) if tool_calls else 0,
         )
 
         return OllamaResponse(
@@ -184,7 +208,85 @@ class OllamaClient:
             model=data.get("model", model),
             tokens_used=tokens_used,
             inference_time_ms=inference_time_ms,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
         )
+
+    def _parse_tool_calls(self, message: dict) -> list[ToolCall] | None:
+        """
+        Parse tool calls from Ollama response message.
+
+        Ollama returns tool calls in the message's tool_calls field:
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": "tool_name",
+                        "arguments": {"arg1": "value1"}
+                    }
+                }
+            ]
+        }
+
+        Args:
+            message: Response message dict from Ollama
+
+        Returns:
+            List of ToolCall objects, or None if no tool calls
+        """
+        raw_tool_calls = message.get("tool_calls")
+        if not raw_tool_calls:
+            return None
+
+        tool_calls = []
+        for i, tc in enumerate(raw_tool_calls):
+            try:
+                # Handle different Ollama tool call formats
+                if isinstance(tc, dict):
+                    function_data = tc.get("function", tc)
+                    name = function_data.get("name")
+
+                    if not name:
+                        logger.warning("Tool call missing name: %s", tc)
+                        continue
+
+                    # Parse arguments - can be string or dict
+                    args_raw = function_data.get("arguments", {})
+                    if isinstance(args_raw, str):
+                        try:
+                            arguments = json.loads(args_raw)
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Failed to parse tool arguments as JSON: %s",
+                                args_raw[:200] if len(args_raw) > 200 else args_raw,
+                            )
+                            arguments = {}
+                    elif isinstance(args_raw, dict):
+                        arguments = args_raw
+                    else:
+                        arguments = {}
+
+                    # Generate a unique ID for the tool call
+                    tool_call_id = tc.get("id") or f"call_{i}_{int(time.time() * 1000)}"
+
+                    tool_calls.append(ToolCall(
+                        id=tool_call_id,
+                        name=name,
+                        arguments=arguments,
+                    ))
+                    logger.debug(
+                        "Parsed tool call: id=%s name=%s args=%s",
+                        tool_call_id,
+                        name,
+                        list(arguments.keys()) if arguments else [],
+                    )
+            except Exception as e:
+                logger.error("Error parsing tool call %d: %s", i, e, exc_info=True)
+                # Continue parsing other tool calls
+
+        return tool_calls if tool_calls else None
 
     async def stream_chat(
         self,
@@ -193,9 +295,10 @@ class OllamaClient:
         temperature: float = 0.7,
         top_p: float = 0.9,
         max_tokens: int = 2048,
-    ) -> AsyncGenerator[str, None]:
+        tools: list[dict] | None = None,
+    ) -> AsyncGenerator[str | dict, None]:
         """
-        Streaming chat completion that yields tokens.
+        Streaming chat completion that yields tokens or tool calls.
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -203,19 +306,25 @@ class OllamaClient:
             temperature: Sampling temperature (0.0 to 1.0)
             top_p: Top-p sampling parameter
             max_tokens: Maximum tokens to generate
+            tools: Optional list of tool definitions in OpenAI format
 
         Yields:
-            String tokens as they are generated
+            String tokens as they are generated, or a dict with tool_calls at the end
 
         Raises:
             httpx.TimeoutException: On request timeout
             httpx.HTTPStatusError: On HTTP errors
             RuntimeError: On connection errors
+
+        Note:
+            When tools are used and the model decides to call a tool, the final
+            yield will be a dict: {"tool_calls": [ToolCall, ...], "done": True}
+            instead of a string token.
         """
         model = model or self.default_model
         url = f"{self.base_url}/api/chat"
 
-        body = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
@@ -226,11 +335,20 @@ class OllamaClient:
             },
         }
 
+        # Add tools if provided
+        if tools:
+            body["tools"] = tools
+            logger.debug("Ollama stream with %d tools", len(tools))
+
         logger.debug(
-            "Ollama stream request: model=%s messages=%d",
+            "Ollama stream request: model=%s messages=%d tools=%d",
             model,
             len(messages),
+            len(tools) if tools else 0,
         )
+
+        # Accumulate tool calls during streaming
+        accumulated_tool_calls: list[dict] = []
 
         try:
             # Use timeout=None for streaming to allow long generations
@@ -260,14 +378,36 @@ class OllamaClient:
                         # Check if done
                         if data.get("done", False):
                             logger.debug(
-                                "Ollama stream completed: model=%s eval_count=%s",
+                                "Ollama stream completed: model=%s eval_count=%s tool_calls=%d",
                                 data.get("model"),
                                 data.get("eval_count"),
+                                len(accumulated_tool_calls),
                             )
+
+                            # If we accumulated tool calls, yield them at the end
+                            if accumulated_tool_calls:
+                                parsed_calls = []
+                                for tc in accumulated_tool_calls:
+                                    parsed = self._parse_single_tool_call(tc)
+                                    if parsed:
+                                        parsed_calls.append(parsed)
+
+                                if parsed_calls:
+                                    yield {"tool_calls": parsed_calls, "done": True}
                             return
 
-                        # Extract token from message
+                        # Extract message from response
                         message = data.get("message", {})
+
+                        # Check for tool calls in streaming response
+                        tool_calls_data = message.get("tool_calls")
+                        if tool_calls_data:
+                            # Accumulate tool calls for final yield
+                            if isinstance(tool_calls_data, list):
+                                accumulated_tool_calls.extend(tool_calls_data)
+                            continue
+
+                        # Extract token from message
                         content = message.get("content", "")
 
                         if content:
@@ -284,6 +424,48 @@ class OllamaClient:
             raise
         finally:
             self._current_client = None
+
+    def _parse_single_tool_call(self, tc: dict) -> ToolCall | None:
+        """
+        Parse a single tool call dict into a ToolCall object.
+
+        Args:
+            tc: Raw tool call dict from Ollama
+
+        Returns:
+            ToolCall object or None if parsing fails
+        """
+        try:
+            function_data = tc.get("function", tc)
+            name = function_data.get("name")
+
+            if not name:
+                logger.warning("Tool call missing name: %s", tc)
+                return None
+
+            # Parse arguments
+            args_raw = function_data.get("arguments", {})
+            if isinstance(args_raw, str):
+                try:
+                    arguments = json.loads(args_raw)
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse tool arguments: %s", args_raw[:100])
+                    arguments = {}
+            elif isinstance(args_raw, dict):
+                arguments = args_raw
+            else:
+                arguments = {}
+
+            tool_call_id = tc.get("id") or f"call_{int(time.time() * 1000)}"
+
+            return ToolCall(
+                id=tool_call_id,
+                name=name,
+                arguments=arguments,
+            )
+        except Exception as e:
+            logger.error("Error parsing tool call: %s", e)
+            return None
 
     async def health_check(self) -> OllamaStatus:
         """
@@ -395,6 +577,79 @@ class OllamaClient:
 
         logger.debug("Ollama cancel called but no active request")
         return False
+
+
+def format_tool_result_message(
+    tool_call: ToolCall,
+    result: Any,
+    is_error: bool = False,
+) -> dict:
+    """
+    Format a tool execution result as an Ollama tool message.
+
+    Ollama expects tool results in this format:
+    {
+        "role": "tool",
+        "content": "result string",
+        "tool_call_id": "call_id"  # optional, for tracking
+    }
+
+    Args:
+        tool_call: The tool call that was executed
+        result: The result from the tool execution
+        is_error: Whether the result is an error
+
+    Returns:
+        Dict formatted as an Ollama tool message
+    """
+    if is_error:
+        content = json.dumps(
+            {"error": {"type": type(result).__name__ if isinstance(result, Exception) else "Error", "detail": str(result)}},
+            ensure_ascii=False,
+        )
+    else:
+        if isinstance(result, str):
+            content = result
+        else:
+            try:
+                content = json.dumps(result, ensure_ascii=False)
+            except (TypeError, ValueError):
+                content = str(result)
+
+    return {
+        "role": "tool",
+        "content": content,
+        # Note: Some Ollama versions may not use tool_call_id, but we include it for compatibility
+    }
+
+
+def format_assistant_tool_call_message(tool_calls: list[ToolCall]) -> dict:
+    """
+    Format tool calls as an assistant message for conversation history.
+
+    When the model makes tool calls, we need to include them in the conversation
+    history for the next turn.
+
+    Args:
+        tool_calls: List of tool calls made by the model
+
+    Returns:
+        Dict formatted as an assistant message with tool_calls
+    """
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": tc.id,
+                "function": {
+                    "name": tc.name,
+                    "arguments": tc.arguments if isinstance(tc.arguments, str) else json.dumps(tc.arguments),
+                },
+            }
+            for tc in tool_calls
+        ],
+    }
 
 
 # Module-level singleton for convenience

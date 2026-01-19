@@ -20,9 +20,12 @@ Modern FastAPI-based proxy service with React + TypeScript frontend. Forwards re
 - ✅ JSON detection and syntax highlighting
 - ✅ **Settings Panel:**
   - Model selection (GPT-4o, GPT-4 Turbo, GPT-4o Mini, GPT-3.5 Turbo)
+  - **Local model selection** (Ollama models: qwen2.5, llama3.2, mistral, etc.)
   - Temperature control (0.0 - 2.0)
   - System prompt customization
   - Conversation compression threshold
+  - **Provider toggle** (Cloud/Local)
+  - **RAG toggle** per-request
 - ✅ **Metrics Panel:**
   - Token usage tracking (input/output/total)
   - Cost calculation per request
@@ -90,6 +93,113 @@ docker run -d \
 export OPENAI_API_KEY="your-key"
 docker compose up -d --build
 ```
+
+## Local Model Setup (Ollama)
+
+Run LLMs locally on your Mac using Ollama for private, offline inference.
+
+### Prerequisites
+
+- **macOS** with Apple Silicon (M1/M2/M3/M4)
+- **16GB+ unified memory** (24GB recommended for 14B models)
+- **Ollama** installed
+
+### Installation
+
+1. **Install Ollama:**
+   ```bash
+   brew install ollama
+   ```
+
+2. **Start Ollama server:**
+   ```bash
+   ollama serve
+   # Runs on http://localhost:11434
+   ```
+
+3. **Pull a model (recommended: qwen2.5:14b):**
+   ```bash
+   # Best quality for 24GB+ RAM
+   ollama pull qwen2.5:14b
+
+   # Lighter alternatives
+   ollama pull llama3.2:3b      # Fast, 8GB RAM
+   ollama pull mistral:7b       # Balanced, 16GB RAM
+   ```
+
+4. **Verify installation:**
+   ```bash
+   curl http://localhost:11434/api/tags
+   # Should return list of installed models
+   ```
+
+### Usage
+
+1. Open the chat interface at http://localhost:5173 (dev) or http://localhost:8333 (prod)
+2. Open **Settings** (gear icon)
+3. In the **Local Model** section:
+   - Toggle **"Use Local Model"** to enable
+   - Select your model from the dropdown
+   - Adjust **Temperature** and **Top P** as needed
+   - Toggle **RAG** on/off per preference
+4. Start chatting — responses stream directly from Ollama
+
+### Model Recommendations
+
+| Model | RAM | Speed | Quality | Best For |
+|-------|-----|-------|---------|----------|
+| `qwen2.5:14b` | 24GB | Medium | Excellent | General use, coding |
+| `llama3.2:3b` | 8GB | Fast | Good | Quick responses |
+| `mistral:7b` | 16GB | Medium | Very Good | Balanced performance |
+| `codellama:7b` | 16GB | Medium | Good | Code generation |
+
+### Features
+
+- **Real-time streaming** — tokens appear as they're generated
+- **Inference metrics** — see tokens/sec, latency, context usage
+- **Provider badge** — shows current model and provider
+- **Offline banner** — alerts when Ollama is unavailable
+- **Stop button** — cancel generation mid-stream
+- **Response caching** — repeated queries are instant
+- **Auto-summarization** — long conversations are compressed automatically
+
+### Troubleshooting
+
+**Ollama not detected:**
+```bash
+# Check if Ollama is running
+curl http://localhost:11434/api/tags
+
+# If not running, start it
+ollama serve
+```
+
+**Model not loaded:**
+```bash
+# List installed models
+ollama list
+
+# Pull missing model
+ollama pull qwen2.5:14b
+```
+
+**Slow inference:**
+- Close other memory-intensive apps
+- Use a smaller model (e.g., `llama3.2:3b`)
+- Check Activity Monitor for memory pressure
+
+**"Context limit exceeded":**
+- The app auto-summarizes long conversations
+- Start a new chat if context is too large
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_ENABLED` | `true` | Enable Ollama support |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `OLLAMA_DEFAULT_MODEL` | `qwen2.5:14b` | Default local model |
+| `OLLAMA_TIMEOUT` | `120` | Request timeout (seconds) |
 
 ## Configuration
 

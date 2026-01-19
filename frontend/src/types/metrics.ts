@@ -27,6 +27,10 @@ export interface InferenceMetrics {
   tokensGenerated: number;
   /** Context window utilization (0-1) */
   contextUtilization: number;
+  /** Provider used for generation */
+  provider?: 'local' | 'cloud';
+  /** Model name used for generation */
+  model?: string;
 }
 
 export interface TotalMetrics {

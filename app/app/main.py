@@ -1,5 +1,7 @@
+import asyncio
 import httpx
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 import logging
@@ -13,7 +15,7 @@ from starlette.requests import Request
 import json
 
 from .config import get_settings
-from .schemas import ChatRequest, ChatResponse, ChatChoice, ChatMessage, ChatUsage, StructuredResponse
+from .schemas import ChatRequest, ChatResponse, ChatChoice, ChatMessage, ChatUsage, StructuredResponse, CancelRequest, CancelResponse
 from .services.chatgpt_client import call_chatgpt, stream_chatgpt
 from .services.provider_router import get_provider_router, ProviderResponse, StreamChunk
 from .mcp.manager import init_mcp_manager
@@ -22,6 +24,9 @@ from .mcp.manager import ensure_mcp_manager, get_mcp_manager
 
 settings = get_settings()
 _level = getattr(logging, str(getattr(settings, "log_level", "INFO")).upper(), logging.INFO)
+
+# Track active streaming generations for cancellation support
+active_generations: dict[str, asyncio.Task] = {}
 
 # Configure logging to ensure output to console even under uvicorn
 logging.basicConfig(
@@ -162,6 +167,30 @@ async def mcp_status(
         }
 
 
+@app.post("/api/chat/cancel", response_model=CancelResponse)
+async def cancel_generation(request: CancelRequest) -> CancelResponse:
+    """
+    Cancel an in-progress streaming generation.
+
+    This endpoint allows clients to abort a streaming chat request that is
+    still in progress. The request_id must match the one returned in the
+    streaming response metadata.
+    """
+    request_id = request.request_id
+    logger.debug("cancel request received request_id=%s", request_id)
+
+    if request_id in active_generations:
+        task = active_generations[request_id]
+        task.cancel()
+        # Remove from tracking dict
+        del active_generations[request_id]
+        logger.info("generation cancelled request_id=%s", request_id)
+        return CancelResponse(success=True, message="Generation cancelled")
+
+    logger.debug("cancel request not found request_id=%s", request_id)
+    return CancelResponse(success=False, message="No active generation found")
+
+
 if use_react_frontend:
     @app.get("/{full_path:path}", response_class=HTMLResponse)
     async def serve_react_app(full_path: str):
@@ -184,12 +213,14 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
     """
     Streams assistant text as Server-Sent Events (SSE) so the UI can render
     tokens incrementally. Events:
+    - event: start, data: {"request_id": "..."} (for cancellation support)
     - event: chunk, data: {"delta": "..."}
     - event: done, data: StructuredResponse-like JSON
     - event: error, data: StructuredResponse-like JSON
     """
     start_time = time.time()
-    request_id = getattr(http_request.state, "request_id", None)
+    # Generate a unique request_id for this stream (for cancellation support)
+    request_id = getattr(http_request.state, "request_id", None) or str(uuid.uuid4())
     logger.debug(
         "stream request received request_id=%s model=%s messages=%d",
         request_id,
@@ -241,6 +272,9 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
         }
 
     async def event_generator():
+        # Emit start event with request_id for cancellation support
+        yield sse("start", {"request_id": request_id})
+
         assistant_text_parts: list[str] = []
         upstream_id: Optional[str] = None
         upstream_model: Optional[str] = request.model or settings.openai_model
@@ -489,8 +523,37 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 },
             )
 
+    async def tracked_event_generator():
+        """
+        Wrapper generator that tracks the streaming task in active_generations
+        for cancellation support, and ensures proper cleanup.
+        """
+        # Register this generation as active
+        # Note: We create a placeholder task entry. The actual task is managed by
+        # the ASGI server, but we use this dict to signal cancellation intent.
+        # When cancelled, asyncio.CancelledError will be raised in the generator.
+        active_generations[request_id] = asyncio.current_task()
+        logger.debug("registered active generation request_id=%s", request_id)
+
+        try:
+            async for event in event_generator():
+                yield event
+        except asyncio.CancelledError:
+            # Generation was cancelled via /api/chat/cancel
+            logger.info("generation cancelled by client request_id=%s", request_id)
+            yield sse("cancelled", {
+                "success": True,
+                "message": "Generation cancelled by client",
+                "request_id": request_id,
+            })
+            raise  # Re-raise to properly clean up the async generator
+        finally:
+            # Always clean up from active_generations
+            active_generations.pop(request_id, None)
+            logger.debug("cleaned up active generation request_id=%s", request_id)
+
     return StreamingResponse(
-        event_generator(),
+        tracked_event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

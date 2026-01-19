@@ -22,6 +22,7 @@ interface MetricsState {
   // Inference metrics actions
   setInferenceMetrics: (metrics: InferenceMetrics) => void;
   clearInferenceMetrics: () => void;
+  initInferenceMetrics: (provider: 'local' | 'cloud', model: string) => void;
   updateTokensPerSecond: (tps: number) => void;
   updateFirstTokenLatency: (latencyMs: number) => void;
   updateTokensGenerated: (tokens: number) => void;
@@ -127,6 +128,17 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
 
   clearInferenceMetrics: () => {
     set({ currentInferenceMetrics: null });
+  },
+
+  initInferenceMetrics: (provider, model) => {
+    // Initialize metrics with zeros - they'll be updated as streaming progresses
+    set({
+      currentInferenceMetrics: {
+        ...defaultInferenceMetrics,
+        provider,
+        model,
+      },
+    });
   },
 
   updateTokensPerSecond: (tps) => {
