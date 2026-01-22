@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useChatStore } from './store/chatStore';
 import { useSettingsStore } from './store/settingsStore';
 import { useMetricsStore } from './store/metricsStore';
+import { useOptimizationStore } from './store/optimizationStore';
 import { AppLayout } from './components/layout/AppLayout';
 import { Header } from './components/layout/Header';
 import { ChatContainer } from './components/chat/ChatContainer';
 import { SettingsPanel } from './components/settings/SettingsPanel';
 import { MetricsPanel } from './components/metrics/MetricsPanel';
+import { SettingsSidebar } from './components/optimization';
 
 type ToastKind = 'info' | 'error';
 type ToastState = {
@@ -20,6 +22,7 @@ function App() {
   const { loadFromStorage: loadChat, clearMessages } = useChatStore();
   const { loadFromStorage: loadSettings } = useSettingsStore();
   const { loadFromStorage: loadMetrics } = useMetricsStore();
+  const { loadFromStorage: loadOptimization } = useOptimizationStore();
 
   const [showSettings, setShowSettings] = useState(false);
   const [toast, setToast] = useState<ToastState>({
@@ -35,7 +38,8 @@ function App() {
     loadChat();
     loadSettings();
     loadMetrics();
-  }, [loadChat, loadSettings, loadMetrics]);
+    loadOptimization();
+  }, [loadChat, loadSettings, loadMetrics, loadOptimization]);
 
   const handleNewChat = () => {
     clearMessages();
@@ -65,6 +69,9 @@ function App() {
             isOpen={showSettings}
             onClose={() => setShowSettings(false)}
           />
+
+          {/* Optimization Sidebar (right side, for local models) */}
+          <SettingsSidebar />
         </div>
       </AppLayout>
 

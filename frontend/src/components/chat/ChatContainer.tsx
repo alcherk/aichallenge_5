@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useState, useEffect } from 'react';
 import { useChatStore } from '@/store/chatStore';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useMetricsStore } from '@/store/metricsStore';
+import { useOptimizationStore } from '@/store/optimizationStore';
 import { chatAPI } from '@/services/api';
 import { cancelGeneration, streamChat } from '@/services/streaming';
 import type { Message, StructuredResponse, OllamaHealthResponse } from '@/types';
@@ -16,6 +17,7 @@ export const ChatContainer: React.FC = () => {
   const { messages, addMessage, setIsStreaming, isStreaming } = useChatStore();
   const { systemPrompt, temperature, model, mcpConfigPath, workspaceRoot, assistantMode, localModel } = useSettingsStore();
   const { updateMetrics, clearInferenceMetrics, initInferenceMetrics } = useMetricsStore();
+  const { promptMode, ollamaOptions, setLastClassification } = useOptimizationStore();
 
   const [messageResponses] = React.useState(new Map<number, StructuredResponse>());
   const [streamingContent, setStreamingContent] = useState('');
@@ -126,6 +128,9 @@ export const ChatContainer: React.FC = () => {
               rag_enabled: localModel.ragEnabled,
               top_p: localModel.topP,
               max_tokens: localModel.maxTokens,
+              // Optimization parameters
+              prompt_mode: promptMode,
+              ollama_options: ollamaOptions,
             },
             {
               onChunk: (delta) => {
@@ -137,6 +142,15 @@ export const ChatContainer: React.FC = () => {
                   addMessage({ role: 'assistant', content: accumulatedContent });
                 }
                 updateMetrics(data);
+
+                // Update classification result from response metadata
+                if (data?.metadata?.prompt_mode && data?.metadata?.classification_confidence !== undefined) {
+                  setLastClassification({
+                    category: data.metadata.prompt_mode,
+                    confidence: data.metadata.classification_confidence,
+                  });
+                }
+
                 setStreamingContent('');
                 setIsStreaming(false);
               },
@@ -237,6 +251,9 @@ export const ChatContainer: React.FC = () => {
       clearInferenceMetrics,
       initInferenceMetrics,
       messageResponses,
+      promptMode,
+      ollamaOptions,
+      setLastClassification,
     ]
   );
 

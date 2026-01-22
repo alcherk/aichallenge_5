@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A FastAPI-based ChatGPT proxy service with RAG (Retrieval-Augmented Generation), MCP (Model Context Protocol) tools, and a React + TypeScript frontend. Runs in Docker on port 8333.
+A FastAPI-based ChatGPT proxy service with RAG (Retrieval-Augmented Generation), MCP (Model Context Protocol) tools, local LLM support via Ollama, and a React + TypeScript frontend. Runs in Docker on port 8333.
 
 ## Development Commands
 
@@ -53,29 +53,38 @@ The app serves different frontends based on build availability:
 - **Production**: React SPA from `frontend/dist/` (built into Docker image)
 - **Legacy fallback**: Jinja2 templates from `app/app/templates/` (when `frontend/dist/` doesn't exist)
 
-Detection in `main.py:37-46`:
+Detection in `main.py:54-63`:
 ```python
 frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
-use_react_frontend = frontend_dist.exists()
+use_react_frontend = frontend_dist.exists() and frontend_dist.is_dir()
 ```
 
 ### Request Flow
 
 ```
-POST /api/chat → call_chatgpt() → [RAG retrieval] → [MCP tools] → OpenAI Responses API → StructuredResponse
-POST /api/chat/stream → stream_chatgpt() → [RAG retrieval] → SSE events (chunk/done/error)
+POST /api/chat → ProviderRouter → [RAG retrieval] → [MCP tools] → LLM Provider → StructuredResponse
+POST /api/chat/stream → ProviderRouter → [RAG retrieval] → SSE events (chunk/done/error)
 ```
+
+The ProviderRouter (`app/app/services/provider_router.py`) abstracts LLM provider selection:
+- `provider: "cloud"` → OpenAI API via `chatgpt_client.py`
+- `provider: "local"` → Ollama via `ollama_client.py`
 
 ### Key Backend Components
 
 | File | Purpose |
 |------|---------|
 | `app/app/main.py` | FastAPI app, endpoints, SSE streaming |
+| `app/app/services/provider_router.py` | Routes requests to cloud (OpenAI) or local (Ollama) providers |
 | `app/app/services/chatgpt_client.py` | `call_chatgpt()`, `stream_chatgpt()`, OpenAI API integration |
+| `app/app/services/ollama_client.py` | `OllamaClient` for local LLM inference |
+| `app/app/services/cache.py` | Response caching with TTL |
+| `app/app/services/summarizer.py` | Auto-compression of long conversation history |
 | `app/app/config.py` | Settings class with `@lru_cache()` |
 | `app/app/schemas.py` | Pydantic models: `ChatRequest`, `StructuredResponse` |
 | `app/app/rag/` | RAG subsystem (chunkenizer adapter, context builder, prompt injection) |
 | `app/app/mcp/` | MCP subsystem (manager, transports, builtin servers) |
+| `app/app/tasks/` | Task management (`/tasks`, `/add`, `/status`, `/priority` commands) |
 
 ### RAG Subsystem (`app/app/rag/`)
 
@@ -109,6 +118,17 @@ Tool naming: `mcp_{server_name}__{tool_name}` (e.g., `mcp_builtin_git__git_diff`
 State management uses Zustand with localStorage persistence.
 
 ## Developer Commands
+
+### Task Management
+
+| Command | Example | Purpose |
+|---------|---------|---------|
+| `/tasks` | `/tasks high` | List tasks (filter by priority/status/assignee) |
+| `/add` | `/add Fix bug @alex high` | Create task with title, assignee, priority |
+| `/status` | `/status` | Project status summary with task stats and risks |
+| `/priority` | `/priority` | Get prioritized task recommendations |
+
+Tasks are stored in `todo.md` with format: `## [priority] Title (id:xxx, @assignee, due:YYYY-MM-DD, status:xxx)`
 
 ### `/help <question>`
 
@@ -153,8 +173,23 @@ Categories checked: Architecture, Code Style, Bugs, Performance, Security
 ### MCP Configuration
 - `MCP_CONFIG_PATH` - path to JSON config for additional MCP servers
 - `WORKSPACE_ROOT` (default: repo root) - constrains filesystem tools
+- `GIT_MCP_MAX_DIFF_SIZE` (default: `50K`) - max diff size for `/review` command
+
+### Ollama Configuration (Local LLM)
+- `OLLAMA_ENABLED` (default: `true`)
+- `OLLAMA_BASE_URL` (default: `http://localhost:11434`)
+- `OLLAMA_DEFAULT_MODEL` (default: `qwen2.5:14b`)
+- `OLLAMA_TIMEOUT` (default: `120` seconds)
 
 ## Implementation Notes
+
+### Provider Abstraction
+
+The `ProviderRouter` in `provider_router.py` provides a unified interface for both cloud and local LLMs:
+- `route_request()` for non-streaming requests
+- `route_stream()` for SSE streaming
+- Handles caching, summarization, and MCP tool calls for both providers
+- Returns `ProviderResponse` with unified format regardless of provider
 
 ### System Prompt Injection
 
@@ -225,3 +260,14 @@ Manual execution:
 ```bash
 ./scripts/deploy.sh
 ```
+
+## Key Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Health check |
+| `/api/ollama/health` | GET | Ollama availability + model list |
+| `/api/mcp/status` | GET | MCP servers and tools status |
+| `/api/chat` | POST | Non-streaming chat (JSON response) |
+| `/api/chat/stream` | POST | Streaming chat (SSE events) |
+| `/api/cancel` | POST | Cancel in-progress generation |

@@ -1,7 +1,7 @@
 // LocalStorage service for persistence
 
-import type { Message, Settings, TotalMetrics, LocalModelSettings } from '@/types';
-import { DEFAULT_SETTINGS, DEFAULT_LOCAL_MODEL_SETTINGS } from '@/types';
+import type { Message, Settings, TotalMetrics, LocalModelSettings, PromptMode, OllamaOptions } from '@/types';
+import { DEFAULT_SETTINGS, DEFAULT_LOCAL_MODEL_SETTINGS, DEFAULT_OLLAMA_OPTIONS } from '@/types';
 
 const KEYS = {
   CONVERSATION: 'chatConversationV1',
@@ -16,6 +16,11 @@ const KEYS = {
   ASSISTANT_MODE: 'assistantMode',
   TOTAL_METRICS: 'totalMetrics',
   LOCAL_MODEL: 'localModel',
+  // Optimization settings
+  PROMPT_MODE: 'promptMode',
+  OLLAMA_OPTIONS: 'ollamaOptions',
+  CUSTOM_TEMPLATES: 'customPromptTemplates',
+  SIDEBAR_COLLAPSED: 'optimizationSidebarCollapsed',
 } as const;
 
 // Helper functions
@@ -151,5 +156,61 @@ export const metricsStorage = {
 
   reset(): void {
     safeSet(KEYS.TOTAL_METRICS, { requests: 0, totalCost: 0 });
+  },
+};
+
+// Optimization storage
+export interface OptimizationSettings {
+  promptMode: PromptMode;
+  ollamaOptions: OllamaOptions;
+  customTemplates: Partial<Record<PromptMode, string>>;
+  sidebarCollapsed: boolean;
+}
+
+const DEFAULT_OPTIMIZATION_SETTINGS: OptimizationSettings = {
+  promptMode: 'auto',
+  ollamaOptions: DEFAULT_OLLAMA_OPTIONS,
+  customTemplates: {},
+  sidebarCollapsed: true,
+};
+
+export const optimizationStorage = {
+  get(): OptimizationSettings {
+    return {
+      promptMode: safeGet<PromptMode>(KEYS.PROMPT_MODE, DEFAULT_OPTIMIZATION_SETTINGS.promptMode),
+      ollamaOptions: safeGet<OllamaOptions>(KEYS.OLLAMA_OPTIONS, DEFAULT_OPTIMIZATION_SETTINGS.ollamaOptions),
+      customTemplates: safeGet<Partial<Record<PromptMode, string>>>(KEYS.CUSTOM_TEMPLATES, {}),
+      sidebarCollapsed: safeGet<boolean>(KEYS.SIDEBAR_COLLAPSED, DEFAULT_OPTIMIZATION_SETTINGS.sidebarCollapsed),
+    };
+  },
+
+  set(settings: OptimizationSettings): void {
+    safeSet(KEYS.PROMPT_MODE, settings.promptMode);
+    safeSet(KEYS.OLLAMA_OPTIONS, settings.ollamaOptions);
+    safeSet(KEYS.CUSTOM_TEMPLATES, settings.customTemplates);
+    safeSet(KEYS.SIDEBAR_COLLAPSED, settings.sidebarCollapsed);
+  },
+
+  setPromptMode(mode: PromptMode): void {
+    safeSet(KEYS.PROMPT_MODE, mode);
+  },
+
+  setOllamaOptions(options: OllamaOptions): void {
+    safeSet(KEYS.OLLAMA_OPTIONS, options);
+  },
+
+  setCustomTemplates(templates: Partial<Record<PromptMode, string>>): void {
+    safeSet(KEYS.CUSTOM_TEMPLATES, templates);
+  },
+
+  setSidebarCollapsed(collapsed: boolean): void {
+    safeSet(KEYS.SIDEBAR_COLLAPSED, collapsed);
+  },
+
+  reset(): void {
+    safeSet(KEYS.PROMPT_MODE, DEFAULT_OPTIMIZATION_SETTINGS.promptMode);
+    safeSet(KEYS.OLLAMA_OPTIONS, DEFAULT_OPTIMIZATION_SETTINGS.ollamaOptions);
+    safeSet(KEYS.CUSTOM_TEMPLATES, {});
+    safeSet(KEYS.SIDEBAR_COLLAPSED, DEFAULT_OPTIMIZATION_SETTINGS.sidebarCollapsed);
   },
 };

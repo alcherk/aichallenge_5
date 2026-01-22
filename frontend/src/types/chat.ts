@@ -7,6 +7,8 @@ export interface Message {
   content: string;
 }
 
+import type { OllamaOptions, PromptMode } from './optimization';
+
 export interface ChatRequest {
   messages: Message[];
   model?: string;
@@ -24,6 +26,10 @@ export interface ChatRequest {
   rag_enabled?: boolean | null;
   // Additional local model options
   top_p?: number;
+  // Ollama optimization parameters
+  ollama_options?: OllamaOptions;
+  // Prompt mode for conditional system prompts
+  prompt_mode?: PromptMode;
 }
 
 export interface TokenUsage {
@@ -81,6 +87,9 @@ export interface StructuredResponse {
     processing_time_ms: number;
     token_usage?: TokenUsage;
     rag?: RAGMetadata;
+    // Optimization metadata
+    prompt_mode?: PromptMode;
+    classification_confidence?: number;
   } | null;
 }
 

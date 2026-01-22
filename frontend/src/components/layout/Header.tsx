@@ -3,6 +3,7 @@ import { chatAPI } from '@/services/api';
 import { useSettingsStore } from '@/store/settingsStore';
 import type { McpStatusResponse } from '@/types';
 import { McpStatusModal } from '@/components/mcp/McpStatusModal';
+import { ModeBadge } from '@/components/optimization';
 
 interface HeaderProps {
   onNewChat: () => void;
@@ -10,7 +11,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({ onNewChat, onSettingsClick }) => {
-  const { mcpEnabled, mcpConfigPath, workspaceRoot } = useSettingsStore();
+  const { mcpEnabled, mcpConfigPath, workspaceRoot, localModel } = useSettingsStore();
   const [showMcp, setShowMcp] = useState(false);
   const [mcpStatus, setMcpStatus] = useState<McpStatusResponse | null>(null);
   const [mcpLoading, setMcpLoading] = useState(false);
@@ -69,7 +70,11 @@ export const Header: React.FC<HeaderProps> = ({ onNewChat, onSettingsClick }) =>
         <p className="text-sm text-slate-400">FastAPI + React + TypeScript</p>
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
+        {/* Mode Badge - only for local provider */}
+        {localModel.provider === 'local' && (
+          <ModeBadge />
+        )}
         {mcpEnabled && (
           <button
             onClick={() => {

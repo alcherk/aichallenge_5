@@ -132,6 +132,58 @@ async def ollama_models():
         }
 
 
+@app.get("/api/ollama/model/{model_name}")
+async def ollama_model_info(model_name: str):
+    """
+    Get detailed model information including context limits.
+
+    Returns model info for optimization parameters UI.
+    """
+    from .services.ollama_client import get_ollama_client
+    from .schemas import ModelInfo
+
+    client = get_ollama_client()
+
+    try:
+        info = await client.get_model_info(model_name)
+        return ModelInfo(
+            name=info["name"],
+            context_length=info["context_length"],
+            default_num_ctx=info["default_num_ctx"],
+            size_bytes=info.get("size"),
+            modified_at=info.get("modified_at"),
+            parameters=info.get("details"),
+        )
+    except Exception as e:
+        logger.warning("Failed to get model info for %s: %s", model_name, e)
+        # Return defaults on error
+        return ModelInfo(
+            name=model_name,
+            context_length=4096,
+            default_num_ctx=4096,
+        )
+
+
+@app.get("/api/prompt-templates")
+async def get_prompt_templates():
+    """
+    Get prompt templates and category defaults for optimization.
+
+    Returns templates, category defaults, and category info for the UI.
+    """
+    from .services.prompt_templates import (
+        DEFAULT_TEMPLATES,
+        CATEGORY_DEFAULTS,
+        CATEGORY_INFO,
+    )
+
+    return {
+        "templates": DEFAULT_TEMPLATES,
+        "defaults": CATEGORY_DEFAULTS,
+        "categories": CATEGORY_INFO,
+    }
+
+
 @app.get("/api/mcp/status")
 async def mcp_status(
     enabled: Optional[bool] = None,

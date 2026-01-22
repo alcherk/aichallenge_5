@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Literal
 
 from ..config import get_settings
-from ..schemas import ChatRequest, ChatMessage
+from ..schemas import ChatRequest, ChatMessage, ClassificationResult, PromptMode
 from .ollama_client import (
     OllamaClient,
     OllamaResponse,
@@ -33,6 +33,12 @@ from .ollama_client import (
 from .chatgpt_client import call_chatgpt, stream_chatgpt
 from .cache import ResponseCache, get_response_cache, CachedResponse
 from .summarizer import HistorySummarizer, get_summarizer
+from .prompt_classifier import PromptClassifier, get_classifier
+from .prompt_templates import (
+    get_template,
+    get_category_defaults,
+    CATEGORY_INFO,
+)
 from ..mcp.manager import ensure_mcp_manager, MCPManager
 
 logger = logging.getLogger("app.provider_router")
@@ -51,6 +57,8 @@ class ProviderResponse:
     tokens_used: int | None = None
     inference_time_ms: int | None = None
     summarized: bool = False  # True if context was auto-summarized
+    prompt_mode: str | None = None  # Detected/applied prompt mode (code, creative, etc.)
+    classification_confidence: float | None = None  # Confidence of auto-classification
 
 
 @dataclass
@@ -80,6 +88,7 @@ class ProviderRouter:
         ollama_client: OllamaClient | None = None,
         cache: ResponseCache | None = None,
         summarizer: HistorySummarizer | None = None,
+        classifier: PromptClassifier | None = None,
     ):
         """
         Initialize the provider router.
@@ -91,10 +100,13 @@ class ProviderRouter:
                   the global singleton will be used.
             summarizer: Optional HistorySummarizer instance. If not provided,
                        the global singleton will be used.
+            classifier: Optional PromptClassifier instance. If not provided,
+                       one will be created using the Ollama client.
         """
         self._ollama_client = ollama_client
         self._cache = cache
         self._summarizer = summarizer
+        self._classifier = classifier
 
     @property
     def ollama_client(self) -> OllamaClient:
@@ -116,6 +128,99 @@ class ProviderRouter:
         if self._summarizer is None:
             self._summarizer = get_summarizer()
         return self._summarizer
+
+    @property
+    def classifier(self) -> PromptClassifier:
+        """Get or create the prompt classifier."""
+        if self._classifier is None:
+            self._classifier = get_classifier(self.ollama_client)
+        return self._classifier
+
+    async def _classify_and_prepare(
+        self,
+        messages: list[dict],
+        prompt_mode: PromptMode | None = "auto",
+        custom_system_prompt: str | None = None,
+    ) -> tuple[list[dict], ClassificationResult | None]:
+        """
+        Classify user message and prepare messages with appropriate system prompt.
+
+        Args:
+            messages: Original messages
+            prompt_mode: Mode to use ("auto" for classification, or specific mode)
+            custom_system_prompt: Optional custom system prompt to use instead of templates
+
+        Returns:
+            Tuple of (prepared_messages, classification_result)
+        """
+        # If a custom system prompt is provided, use it directly
+        if custom_system_prompt:
+            return self._inject_system_prompt(messages, custom_system_prompt), None
+
+        # If mode is not auto, use the specified mode
+        if prompt_mode and prompt_mode != "auto":
+            template = get_template(prompt_mode)
+            return self._inject_system_prompt(messages, template), ClassificationResult(
+                category=prompt_mode,
+                confidence=1.0,
+            )
+
+        # Auto mode: classify the user's message
+        # Find the last user message for classification
+        last_user_message = None
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_message = msg.get("content", "")
+                break
+
+        if not last_user_message:
+            # No user message found, use general template
+            template = get_template("general")
+            return self._inject_system_prompt(messages, template), ClassificationResult(
+                category="general",
+                confidence=0.0,
+            )
+
+        # Classify the message
+        classification = await self.classifier.classify(last_user_message)
+        template = get_template(classification.category)
+
+        logger.debug(
+            "Auto-classified message as '%s' (confidence=%.2f)",
+            classification.category,
+            classification.confidence,
+        )
+
+        return self._inject_system_prompt(messages, template), classification
+
+    def _inject_system_prompt(
+        self,
+        messages: list[dict],
+        system_prompt: str,
+    ) -> list[dict]:
+        """
+        Inject or replace system prompt in messages.
+
+        If the first message is already a system message, replace it.
+        Otherwise, prepend the system message.
+
+        Args:
+            messages: Original messages
+            system_prompt: System prompt to inject
+
+        Returns:
+            New messages list with system prompt
+        """
+        if not messages:
+            return [{"role": "system", "content": system_prompt}]
+
+        # Check if first message is system
+        if messages[0].get("role") == "system":
+            # Replace existing system message
+            return [{"role": "system", "content": system_prompt}] + messages[1:]
+        else:
+            # Prepend system message
+            return [{"role": "system", "content": system_prompt}] + messages
 
     async def chat(
         self,
@@ -279,14 +384,54 @@ class ProviderRouter:
 
         If mcp_enabled is True and tools are available, the model can invoke
         MCP tools and we'll execute a multi-turn conversation loop.
+
+        Supports conditional prompts via prompt_mode parameter.
         """
         # Extract Ollama-specific options
         top_p = kwargs.get("top_p", 0.9)
+
+        # Extract prompt mode and custom options
+        prompt_mode: PromptMode | None = kwargs.get("prompt_mode", "auto")
+        ollama_options = kwargs.get("ollama_options") or {}
+        custom_system_prompt = kwargs.get("custom_system_prompt")
 
         # Extract MCP options
         mcp_enabled = kwargs.get("mcp_enabled", False)
         mcp_config_path = kwargs.get("mcp_config_path")
         workspace_root = kwargs.get("workspace_root")
+
+        # Classify and prepare messages with appropriate system prompt
+        classification: ClassificationResult | None = None
+        if prompt_mode:
+            prepared_messages, classification = await self._classify_and_prepare(
+                messages=messages,
+                prompt_mode=prompt_mode,
+                custom_system_prompt=custom_system_prompt,
+            )
+        else:
+            prepared_messages = list(messages)
+
+        # Apply category defaults if we have a classification
+        effective_temperature = temperature
+        effective_options: dict[str, Any] = dict(ollama_options)
+
+        if classification:
+            category_defaults = get_category_defaults(classification.category)
+
+            # Apply category default for num_ctx if not explicitly set
+            if "num_ctx" not in effective_options:
+                effective_options["num_ctx"] = category_defaults["num_ctx"]
+
+            # Apply category default for temperature if using default (0.7)
+            if temperature == 0.7:  # Default value
+                effective_temperature = category_defaults["temperature"]
+
+            logger.debug(
+                "Applied category defaults for '%s': num_ctx=%s, temperature=%.2f",
+                classification.category,
+                effective_options.get("num_ctx"),
+                effective_temperature,
+            )
 
         # Get MCP manager and tools if MCP is enabled
         mcp_manager: MCPManager | None = None
@@ -313,7 +458,7 @@ class ProviderRouter:
                 # Continue without tools
 
         # Build working copy of messages for potential tool loop
-        working_messages = list(messages)
+        working_messages = list(prepared_messages)
         total_tokens = 0
         total_inference_time_ms = 0
 
@@ -322,10 +467,11 @@ class ProviderRouter:
             response = await self.ollama_client.chat(
                 messages=working_messages,
                 model=model,
-                temperature=temperature,
+                temperature=effective_temperature,
                 top_p=top_p,
                 max_tokens=max_tokens or 2048,
                 tools=tools,
+                options=effective_options if effective_options else None,
             )
 
             # Accumulate metrics
@@ -384,6 +530,8 @@ class ProviderRouter:
                 provider="local",
                 tokens_used=total_tokens or response.tokens_used,
                 inference_time_ms=total_inference_time_ms or response.inference_time_ms,
+                prompt_mode=classification.category if classification else None,
+                classification_confidence=classification.confidence if classification else None,
             )
 
         # Exceeded max rounds - return last response with warning
@@ -396,6 +544,8 @@ class ProviderRouter:
             model=response.model,
             provider="local",
             tokens_used=total_tokens,
+            prompt_mode=classification.category if classification else None,
+            classification_confidence=classification.confidence if classification else None,
             inference_time_ms=total_inference_time_ms,
         )
 
@@ -664,27 +814,71 @@ class ProviderRouter:
         max_tokens: int | None = None,
         **kwargs,
     ) -> AsyncGenerator[StreamChunk, None]:
-        """Stream via local Ollama provider."""
+        """Stream via local Ollama provider with conditional prompt support."""
         # Extract Ollama-specific options
         top_p = kwargs.get("top_p", 0.9)
+
+        # Extract prompt mode and custom options
+        prompt_mode: PromptMode | None = kwargs.get("prompt_mode", "auto")
+        ollama_options = kwargs.get("ollama_options") or {}
+        custom_system_prompt = kwargs.get("custom_system_prompt")
 
         # Use model from client if not specified
         actual_model = model or self.ollama_client.default_model
 
-        # Stream from Ollama - it yields raw string tokens
+        # Classify and prepare messages with appropriate system prompt
+        classification: ClassificationResult | None = None
+        if prompt_mode:
+            prepared_messages, classification = await self._classify_and_prepare(
+                messages=messages,
+                prompt_mode=prompt_mode,
+                custom_system_prompt=custom_system_prompt,
+            )
+        else:
+            prepared_messages = list(messages)
+
+        # Apply category defaults if we have a classification
+        effective_temperature = temperature
+        effective_options: dict[str, Any] = dict(ollama_options)
+
+        if classification:
+            category_defaults = get_category_defaults(classification.category)
+
+            # Apply category default for num_ctx if not explicitly set
+            if "num_ctx" not in effective_options:
+                effective_options["num_ctx"] = category_defaults["num_ctx"]
+
+            # Apply category default for temperature if using default (0.7)
+            if temperature == 0.7:  # Default value
+                effective_temperature = category_defaults["temperature"]
+
+            logger.debug(
+                "Stream: Applied category defaults for '%s': num_ctx=%s, temperature=%.2f",
+                classification.category,
+                effective_options.get("num_ctx"),
+                effective_temperature,
+            )
+
+        # Stream from Ollama - it yields raw string tokens or tool call dicts
         async for token in self.ollama_client.stream_chat(
-            messages=messages,
+            messages=prepared_messages,
             model=model,
-            temperature=temperature,
+            temperature=effective_temperature,
             top_p=top_p,
             max_tokens=max_tokens or 2048,
+            options=effective_options if effective_options else None,
         ):
-            yield StreamChunk(
-                delta=token,
-                model=actual_model,
-                provider="local",
-                done=False,
-            )
+            # Handle string tokens
+            if isinstance(token, str):
+                yield StreamChunk(
+                    delta=token,
+                    model=actual_model,
+                    provider="local",
+                    done=False,
+                )
+            # Handle tool call dicts (skip for now in streaming)
+            elif isinstance(token, dict) and token.get("done"):
+                break
 
         # Send final done chunk
         yield StreamChunk(

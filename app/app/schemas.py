@@ -10,6 +10,25 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class OllamaOptions(BaseModel):
+    """Advanced Ollama generation parameters for optimization."""
+    num_ctx: Optional[int] = None  # Context window size (2048-32768)
+    num_predict: Optional[int] = None  # Max tokens to generate (128-4096)
+    repeat_penalty: Optional[float] = None  # Repetition penalty (1.0-2.0)
+    num_gpu: Optional[int] = None  # Number of GPU layers (0-99)
+    num_thread: Optional[int] = None  # Number of CPU threads (1-16)
+
+
+# Prompt mode for conditional system prompts
+PromptMode = Literal["auto", "code", "creative", "analysis", "general"]
+
+
+class ClassificationResult(BaseModel):
+    """Result from LLM prompt classifier."""
+    category: PromptMode
+    confidence: float = 0.0
+
+
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]
     model: Optional[str] = None
@@ -26,6 +45,10 @@ class ChatRequest(BaseModel):
     assistant_mode: Optional[bool] = None
     # RAG toggle: None = use default for provider (cloud=enabled, local=disabled by default)
     rag_enabled: Optional[bool] = None
+    # Ollama optimization parameters
+    ollama_options: Optional[OllamaOptions] = None
+    # Prompt mode for conditional system prompts
+    prompt_mode: Optional[PromptMode] = "auto"
 
 
 class ChatChoice(BaseModel):
@@ -83,3 +106,13 @@ class CancelResponse(BaseModel):
     """Response for cancel operation."""
     success: bool
     message: str
+
+
+class ModelInfo(BaseModel):
+    """Ollama model information including context limits."""
+    name: str
+    context_length: int  # Maximum supported context
+    default_num_ctx: int  # Default context size
+    size_bytes: Optional[int] = None
+    modified_at: Optional[str] = None
+    parameters: Optional[dict] = None

@@ -4,3 +4,4 @@ export * from './chat';
 export * from './settings';
 export * from './metrics';
 export * from './mcp';
+export * from './optimization';

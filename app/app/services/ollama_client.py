@@ -98,6 +98,7 @@ class OllamaClient:
         top_p: float = 0.9,
         max_tokens: int = 2048,
         tools: list[dict] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> OllamaResponse:
         """
         Non-streaming chat completion.
@@ -109,6 +110,7 @@ class OllamaClient:
             top_p: Top-p sampling parameter
             max_tokens: Maximum tokens to generate
             tools: Optional list of tool definitions in OpenAI format
+            options: Optional additional Ollama options (num_ctx, repeat_penalty, etc.)
 
         Returns:
             OllamaResponse with content, metadata, and optional tool_calls
@@ -121,15 +123,21 @@ class OllamaClient:
         model = model or self.default_model
         url = f"{self.base_url}/api/chat"
 
+        # Build options dict with defaults and overrides
+        ollama_options: dict[str, Any] = {
+            "temperature": temperature,
+            "top_p": top_p,
+            "num_predict": max_tokens,
+        }
+        # Merge additional options if provided
+        if options:
+            ollama_options.update(options)
+
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": False,
-            "options": {
-                "temperature": temperature,
-                "top_p": top_p,
-                "num_predict": max_tokens,
-            },
+            "options": ollama_options,
         }
 
         # Add tools if provided (Ollama uses OpenAI-compatible format)
@@ -296,6 +304,7 @@ class OllamaClient:
         top_p: float = 0.9,
         max_tokens: int = 2048,
         tools: list[dict] | None = None,
+        options: dict[str, Any] | None = None,
     ) -> AsyncGenerator[str | dict, None]:
         """
         Streaming chat completion that yields tokens or tool calls.
@@ -307,6 +316,7 @@ class OllamaClient:
             top_p: Top-p sampling parameter
             max_tokens: Maximum tokens to generate
             tools: Optional list of tool definitions in OpenAI format
+            options: Optional additional Ollama options (num_ctx, repeat_penalty, etc.)
 
         Yields:
             String tokens as they are generated, or a dict with tool_calls at the end
@@ -324,15 +334,21 @@ class OllamaClient:
         model = model or self.default_model
         url = f"{self.base_url}/api/chat"
 
+        # Build options dict with defaults and overrides
+        ollama_options: dict[str, Any] = {
+            "temperature": temperature,
+            "top_p": top_p,
+            "num_predict": max_tokens,
+        }
+        # Merge additional options if provided
+        if options:
+            ollama_options.update(options)
+
         body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "options": {
-                "temperature": temperature,
-                "top_p": top_p,
-                "num_predict": max_tokens,
-            },
+            "options": ollama_options,
         }
 
         # Add tools if provided
@@ -510,6 +526,100 @@ class OllamaClient:
                 models=[],
                 error=error_msg,
             )
+
+    async def get_model_info(self, model: str | None = None) -> dict[str, Any]:
+        """
+        Get detailed model information including context limits.
+
+        Uses Ollama's /api/show endpoint to retrieve model details.
+
+        Args:
+            model: Model name (default: client's default_model)
+
+        Returns:
+            Dict with model info including:
+            - name: Model name
+            - context_length: Maximum context window size
+            - default_num_ctx: Default context size
+            - parameters: Model parameters
+            - size: Model size in bytes
+            - modified_at: Last modification timestamp
+
+        Raises:
+            httpx.ConnectError: On connection failure
+            httpx.TimeoutException: On timeout
+            httpx.HTTPStatusError: On HTTP errors
+        """
+        model = model or self.default_model
+        url = f"{self.base_url}/api/show"
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(url, json={"name": model})
+                response.raise_for_status()
+                data = response.json()
+
+        except httpx.ConnectError as e:
+            logger.error("Failed to connect to Ollama at %s: %s", self.base_url, e)
+            raise
+        except httpx.TimeoutException as e:
+            logger.error("Ollama get_model_info timed out: %s", e)
+            raise
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                "Ollama get_model_info HTTP error: status=%d",
+                e.response.status_code,
+            )
+            raise
+
+        # Extract context length from model info
+        # Ollama stores this in modelfile parameters or model_info
+        model_info = data.get("model_info", {})
+        parameters = data.get("parameters", "")
+
+        # Try to extract context length from various sources
+        context_length = 4096  # Default fallback
+
+        # Check model_info for context_length key
+        for key in model_info:
+            if "context" in key.lower():
+                try:
+                    context_length = int(model_info[key])
+                    break
+                except (ValueError, TypeError):
+                    pass
+
+        # Check parameters string for num_ctx
+        if isinstance(parameters, str) and "num_ctx" in parameters:
+            import re
+            match = re.search(r'num_ctx\s+(\d+)', parameters)
+            if match:
+                context_length = int(match.group(1))
+
+        # Some models report context_length directly
+        if "context_length" in data:
+            try:
+                context_length = int(data["context_length"])
+            except (ValueError, TypeError):
+                pass
+
+        logger.debug(
+            "Model info for %s: context_length=%d",
+            model,
+            context_length,
+        )
+
+        return {
+            "name": model,
+            "context_length": context_length,
+            "default_num_ctx": context_length,  # Same as max for now
+            "parameters": data.get("parameters"),
+            "size": data.get("size"),
+            "modified_at": data.get("modified_at"),
+            "template": data.get("template"),
+            "modelfile": data.get("modelfile"),
+            "details": data.get("details", {}),
+        }
 
     async def list_models(self) -> list[OllamaModel]:
         """
