@@ -7,6 +7,8 @@ import type {
   OllamaHealthResponse,
   OllamaModel,
   CancelResponse,
+  SttEnabledResponse,
+  TranscribeResponse,
 } from '@/types';
 
 type McpStatusQuery = {
@@ -136,5 +138,54 @@ export const chatAPI = {
         message: error instanceof Error ? error.message : 'Unknown error',
       };
     }
+  },
+
+  /**
+   * Check if STT is enabled on the backend.
+   *
+   * Backend endpoint: GET /api/stt/enabled
+   */
+  async sttEnabled(): Promise<SttEnabledResponse> {
+    const response = await fetch('/api/stt/enabled');
+    if (!response.ok) {
+      return { enabled: false };
+    }
+    return response.json();
+  },
+
+  /**
+   * Transcribe an audio recording.
+   *
+   * Backend endpoint: POST /api/stt/transcribe (multipart/form-data)
+   */
+  async transcribeAudio(
+    audio: Blob,
+    opts?: { language?: string }
+  ): Promise<TranscribeResponse> {
+    const form = new FormData();
+    const filename = audio.type.includes('ogg')
+      ? 'recording.ogg'
+      : audio.type.includes('wav')
+        ? 'recording.wav'
+        : 'recording.webm';
+    form.append('file', audio, filename);
+    if (opts?.language) form.append('language', opts.language);
+
+    const response = await fetch('/api/stt/transcribe', {
+      method: 'POST',
+      body: form,
+    });
+
+    if (!response.ok) {
+      let detail = '';
+      try {
+        detail = (await response.text()).trim();
+      } catch {
+        detail = '';
+      }
+      throw new Error(detail || `Transcription failed with status ${response.status}`);
+    }
+
+    return response.json();
   },
 };

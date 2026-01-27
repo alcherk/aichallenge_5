@@ -93,6 +93,14 @@ export interface StructuredResponse {
   } | null;
 }
 
+export interface SttEnabledResponse {
+  enabled: boolean;
+}
+
+export interface TranscribeResponse {
+  text: string;
+}
+
 // SSE Event types
 export interface SSEChunkEvent {
   event: 'chunk';

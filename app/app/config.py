@@ -71,6 +71,14 @@ class Settings:
         self.ollama_default_model: str = os.getenv("OLLAMA_DEFAULT_MODEL", "qwen2.5:14b").strip()
         self.ollama_timeout: int = int(os.getenv("OLLAMA_TIMEOUT", "120"))
 
+        # Speech-to-text (STT) configuration (optional, disabled by default)
+        stt_enabled_str = os.getenv("STT_ENABLED", "false").strip().lower()
+        self.stt_enabled: bool = stt_enabled_str in {"1", "true", "yes", "y", "on"}
+        self.stt_provider: str = os.getenv("STT_PROVIDER", "openai").strip().lower()
+        self.stt_model: str = os.getenv("STT_MODEL", "gpt-4o-mini-transcribe").strip()
+        self.stt_max_bytes: int = int(os.getenv("STT_MAX_BYTES", "25000000"))  # ~25MB
+        self.stt_default_language: str = os.getenv("STT_DEFAULT_LANGUAGE", "").strip()
+
 
 @lru_cache()
 def get_settings() -> Settings:

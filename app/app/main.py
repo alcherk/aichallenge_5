@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.responses import StreamingResponse
@@ -15,7 +15,17 @@ from starlette.requests import Request
 import json
 
 from .config import get_settings
-from .schemas import ChatRequest, ChatResponse, ChatChoice, ChatMessage, ChatUsage, StructuredResponse, CancelRequest, CancelResponse
+from .schemas import (
+    ChatRequest,
+    ChatResponse,
+    ChatChoice,
+    ChatMessage,
+    ChatUsage,
+    StructuredResponse,
+    CancelRequest,
+    CancelResponse,
+    TranscribeResponse,
+)
 from .services.chatgpt_client import call_chatgpt, stream_chatgpt
 from .services.provider_router import get_provider_router, ProviderResponse, StreamChunk
 from .mcp.manager import init_mcp_manager
@@ -217,6 +227,79 @@ async def mcp_status(
             "tools": [],
             "error": {"type": type(e).__name__, "detail": str(e)},
         }
+
+
+@app.get("/api/stt/enabled")
+async def stt_enabled() -> dict:
+    """
+    Lightweight probe endpoint for the UI.
+    """
+    return {"enabled": bool(getattr(settings, "stt_enabled", False))}
+
+
+async def _read_upload_limited(upload: UploadFile, *, max_bytes: int) -> bytes:
+    """
+    Read an UploadFile into memory with a hard size cap.
+    """
+    buf = bytearray()
+    chunk_size = 1024 * 1024  # 1MB
+    while True:
+        chunk = await upload.read(chunk_size)
+        if not chunk:
+            break
+        buf.extend(chunk)
+        if len(buf) > max_bytes:
+            raise HTTPException(status_code=413, detail="Audio file too large")
+    return bytes(buf)
+
+
+@app.post("/api/stt/transcribe", response_model=TranscribeResponse)
+async def stt_transcribe(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+) -> TranscribeResponse:
+    """
+    Speech-to-text transcription endpoint.
+
+    Expects multipart/form-data with `file` and optional `language`.
+    """
+    if not bool(getattr(settings, "stt_enabled", False)):
+        # Keep UI unchanged when disabled.
+        raise HTTPException(status_code=404, detail="STT is disabled")
+
+    content_type = (file.content_type or "").strip().lower()
+    if not content_type.startswith("audio/"):
+        raise HTTPException(status_code=415, detail="Unsupported content-type (expected audio/*)")
+
+    max_bytes = int(getattr(settings, "stt_max_bytes", 25_000_000))
+    audio_bytes = await _read_upload_limited(file, max_bytes=max_bytes)
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    lang = (language or "").strip() or (getattr(settings, "stt_default_language", "") or "").strip() or None
+    provider = (getattr(settings, "stt_provider", "openai") or "openai").strip().lower()
+
+    try:
+        if provider != "openai":
+            raise HTTPException(status_code=500, detail=f"Unsupported STT provider: {provider}")
+
+        from .services.stt_client import transcribe_audio_openai
+
+        text = await transcribe_audio_openai(
+            audio_bytes=audio_bytes,
+            filename=file.filename or "audio.webm",
+            content_type=content_type,
+            language=lang,
+        )
+        return TranscribeResponse(text=text)
+    except httpx.HTTPStatusError as e:
+        # Bubble up a safe subset of upstream details
+        detail = ""
+        try:
+            detail = (e.response.text or "").strip()
+        except Exception:
+            detail = ""
+        raise HTTPException(status_code=502, detail=detail or "Upstream transcription error")
 
 
 @app.post("/api/chat/cancel", response_model=CancelResponse)

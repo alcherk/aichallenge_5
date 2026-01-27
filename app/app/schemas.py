@@ -108,6 +108,11 @@ class CancelResponse(BaseModel):
     message: str
 
 
+class TranscribeResponse(BaseModel):
+    """Response for speech-to-text transcription."""
+    text: str
+
+
 class ModelInfo(BaseModel):
     """Ollama model information including context limits."""
     name: str
